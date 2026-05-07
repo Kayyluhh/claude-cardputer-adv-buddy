@@ -1544,8 +1544,7 @@ def main() -> int:
     event = payload.get("hook_event_name", "")
     cwd = payload.get("cwd", "")
     if _project_disabled(cwd):
-        if event == "PreToolUse":
-            _emit_pretooluse("ask", "buddy disabled in project")
+        # Spec §11.3: exit 0 silently when disabled. CC behaves as if no hook fired.
         return 0
 
     sock_path = os.environ.get("BUDDY_SOCKET", DEFAULT_SOCKET)
