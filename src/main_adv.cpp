@@ -103,6 +103,16 @@ static void beep(uint16_t freq, uint16_t dur) {
   if (settings().sound) Platform::tone(freq, dur);
 }
 
+// Mario 1-UP — E5 G5 E6 C6 D6 G6, ~35ms/note (90ms tail). Loud enough
+// across-the-room "come look at me" cue when a permission prompt lands
+// or a pairing passkey appears. (Cherry-picked from y88huang.)
+static const uint16_t SFX_ALERT_F[] = { 659, 784, 1319, 1047, 1175, 1568 };
+static const uint16_t SFX_ALERT_D[] = {  35,  35,   35,   35,   35,   90 };
+static void sfxAlert() {
+  if (settings().sound) Platform::beepSeq(SFX_ALERT_F, SFX_ALERT_D,
+                                           sizeof(SFX_ALERT_F) / sizeof(SFX_ALERT_F[0]));
+}
+
 static void sendCmd(const char* json) {
   Serial.println(json);
   size_t n = strlen(json);
@@ -741,7 +751,7 @@ void loop() {
     if (tama.promptId[0]) {
       promptArrivedMs = millis();
       wake();
-      beep(1200, 80);
+      sfxAlert();
       displayMode = DISP_NORMAL;
       menuOpen = settingsOpen = resetOpen = false;
       applyDisplayMode();
@@ -844,7 +854,7 @@ void loop() {
   // Pairing-passkey beep on first appearance
   static uint32_t lastPasskey = 0;
   uint32_t pk = blePasskey();
-  if (pk && !lastPasskey) { wake(); beep(1800, 60); }
+  if (pk && !lastPasskey) { wake(); sfxAlert(); }
   lastPasskey = pk;
 
   clockRefreshRtc();

@@ -26,6 +26,9 @@ void    powerOff();   // best-effort: Cardputer-Adv has a hardware power switch
 void    tone(uint16_t freqHz, uint16_t durMs);
 void    tickAudio();  // no-op on M5Unified Speaker (non-blocking); kept for
                       // call-site compatibility with M5.Beep.update().
+// Play a sequence of (freq, dur) tones back-to-back. Blocks for the
+// total duration. Used for the Mario 1-UP permission-arrival jingle.
+void    beepSeq(const uint16_t* freqHz, const uint16_t* durMs, uint8_t n);
 
 // LED — Cardputer-Adv has an RGB LED; brightness 0 = off, 1..255 = on.
 // Color is left to the caller via setLedRgb if richer indication is needed.

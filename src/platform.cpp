@@ -64,6 +64,13 @@ void tone(uint16_t freqHz, uint16_t durMs) {
 
 void tickAudio() { /* M5Unified Speaker is non-blocking */ }
 
+void beepSeq(const uint16_t* freqHz, const uint16_t* durMs, uint8_t n) {
+  for (uint8_t i = 0; i < n; i++) {
+    M5Cardputer.Speaker.tone(freqHz[i], durMs[i]);
+    delay(durMs[i]);
+  }
+}
+
 // ---------------- LED ----------------
 
 void setLed(uint8_t brightness) {
