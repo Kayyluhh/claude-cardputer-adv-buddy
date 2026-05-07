@@ -61,14 +61,25 @@ char     lastPromptId[40] = "";
 uint32_t lastInteractMs = 0;
 bool     dimmed = false;
 bool     screenOff = false;
-bool     buddyMode = true;          // GIFs deferred to phase 6 — always ASCII
+bool     buddyMode = true;          // ASCII vs GIF; flipped by setup() after scan
 bool     gifAvailable = false;
-const uint8_t SPECIES_GIF = 0xFF;
+const uint8_t SPECIES_GIF = 0xFF;   // species-NVS sentinel: render the GIF
 
+// Cycle pet: GIF (if installed) -> species 0..N-1 -> back to GIF.
 static void nextPet() {
-  buddyNextSpecies();
+  uint8_t n = buddySpeciesCount();
+  if (!buddyMode) {                                            // GIF -> species 0
+    buddyMode = true;
+    buddySetSpeciesIdx(0);
+    speciesIdxSave(0);
+  } else if (buddySpeciesIdx() + 1 >= n && gifAvailable) {     // last species -> GIF
+    buddyMode = false;
+    speciesIdxSave(SPECIES_GIF);
+  } else {                                                     // species i -> i+1
+    buddyNextSpecies();
+  }
   characterInvalidate();
-  buddyInvalidate();
+  if (buddyMode) buddyInvalidate();
 }
 
 uint32_t wakeTransitionUntil = 0;
@@ -145,8 +156,8 @@ const uint8_t SETTINGS_N = 9;
 
 bool    resetOpen = false;
 uint8_t resetSel  = 0;
-const char* resetItems[] = { "factory reset", "back" };
-const uint8_t RESET_N = 2;
+const char* resetItems[] = { "delete char", "factory reset", "back" };
+const uint8_t RESET_N = 3;
 static uint32_t resetConfirmUntil = 0;
 static uint8_t  resetConfirmIdx = 0xFF;
 
@@ -170,7 +181,7 @@ static void applyReset(uint8_t idx) {
   uint32_t now = millis();
   bool armed = (resetConfirmIdx == idx) && (int32_t)(now - resetConfirmUntil) < 0;
 
-  if (idx == 1) { resetOpen = false; return; }   // back
+  if (idx == 2) { resetOpen = false; return; }   // back
 
   if (!armed) {
     resetConfirmIdx = idx;
@@ -180,12 +191,39 @@ static void applyReset(uint8_t idx) {
   }
 
   beep(800, 200);
-  // factory reset: NVS namespace wipe + filesystem format + BLE bonds
-  _prefs.begin("buddy", false);
-  _prefs.clear();
-  _prefs.end();
-  LittleFS.format();
-  bleClearBonds();
+  if (idx == 0) {
+    // delete char: wipe /characters/, reboot into ASCII mode
+    File d = LittleFS.open("/characters");
+    if (d && d.isDirectory()) {
+      File e;
+      while ((e = d.openNextFile())) {
+        char path[80];
+        snprintf(path, sizeof(path), "/characters/%s", e.name());
+        if (e.isDirectory()) {
+          File f;
+          while ((f = e.openNextFile())) {
+            char fp[128];
+            snprintf(fp, sizeof(fp), "%s/%s", path, f.name());
+            f.close();
+            LittleFS.remove(fp);
+          }
+          e.close();
+          LittleFS.rmdir(path);
+        } else {
+          e.close();
+          LittleFS.remove(path);
+        }
+      }
+      d.close();
+    }
+  } else {
+    // factory reset: NVS namespace wipe + filesystem format + BLE bonds
+    _prefs.begin("buddy", false);
+    _prefs.clear();
+    _prefs.end();
+    LittleFS.format();
+    bleClearBonds();
+  }
   delay(300);
   ESP.restart();
 }
@@ -859,10 +897,36 @@ void loop() {
 
   clockRefreshRtc();
 
-  // Render: buddy in left column first, then full-screen overlay or
+  // Render: pet in left column first, then full-screen overlay or
   // right-column HUD on top.
   if (!napping && !screenOff) {
-    if (buddyMode) buddyTick(activeState);
+    if (buddyMode) {
+      buddyTick(activeState);
+    } else if (characterLoaded()) {
+      characterSetState(activeState);
+      characterTick();
+    } else {
+      // No buddy and no GIF — show install progress if a char pack is
+      // streaming in over BLE, otherwise a quiet "no character loaded".
+      const Palette& p = characterPalette();
+      spr.fillRect(0, 0, 120, H, p.bg);
+      spr.setTextColor(p.textDim, p.bg);
+      spr.setTextSize(1);
+      if (xferActive()) {
+        uint32_t done = xferProgress(), total = xferTotal();
+        spr.setCursor(8, H/2 - 20); spr.print("installing");
+        spr.setCursor(8, H/2 - 8);  spr.printf("%luK/%luK", done/1024, total/1024);
+        int barW = 120 - 16;
+        spr.drawRect(8, H/2 + 6, barW, 8, p.textDim);
+        if (total > 0) {
+          int fill = (int)((uint64_t)barW * done / total);
+          if (fill > 1) spr.fillRect(9, H/2 + 7, fill - 1, 6, p.body);
+        }
+      } else {
+        spr.setCursor(8, H/2 - 4);
+        spr.print("no character");
+      }
+    }
   }
 
   if (!napping && !screenOff) {

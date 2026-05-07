@@ -1,5 +1,5 @@
 #include "character.h"
-#include <M5StickCPlus.h>
+#include "gfx_compat.h"
 #include <LittleFS.h>
 #include <AnimatedGIF.h>
 #include <ArduinoJson.h>
@@ -37,21 +37,27 @@ static uint8_t curState = 0xFF;
 static AnimatedGIF gif;
 static File        gifFile;
 static int         gifX = 0, gifY = 0, gifW = 0, gifH = 0;
-// Peek mode pins the GIF bottom to the info-panel top (y=70) so the pet
-// sits on the panel edge regardless of canvas height. Home mode centers
-// in the upper 140px. No padding assumed in the source art.
-static const int   PEEK_TOP = 70;
+// Cardputer-Adv landscape 240x135. Home mode places the GIF in the left
+// column matching the ASCII buddy zone (~120px wide). Peek mode is used
+// when info/pet pages are active; those pages fillSprite() and own the
+// full canvas, so peek mostly just exists as the half-scale path for
+// any future status-row use. PEEK_TOP set inside the right column area.
+static const int   BUDDY_COL_W = 120;
+static const int   PEEK_TOP    = 60;
 static bool        peekMode = false;
-// Draw target — defaults to the sprite; characterRenderTo() retargets to
-// M5.Lcd for the landscape clock (both inherit TFT_eSPI).
-static TFT_eSPI*   _tgt = &spr;
-// Peek mode renders at half scale (2:1 nearest-neighbor in gifDrawCb) so
-// the whole pet fits the 70px window instead of cropping the top.
+static M5Canvas*   _tgt = &spr;       // retargeting dropped with landscape clock
+// Peek mode renders at half scale (2:1 nearest-neighbor in gifDrawCb).
 static void gifPlace() {
   int outW = peekMode ? gifW / 2 : gifW;
   int outH = peekMode ? gifH / 2 : gifH;
-  gifX = (spr.width() - outW) / 2;
-  gifY = peekMode ? (PEEK_TOP - outH) / 2 : (140 - outH) / 2;
+  if (peekMode) {
+    gifX = (spr.width() - outW) / 2;
+    gifY = (PEEK_TOP - outH) / 2;
+  } else {
+    // Center the GIF inside the left buddy column, vertically centered.
+    gifX = (BUDDY_COL_W - outW) / 2;
+    gifY = (spr.height() - outH) / 2;
+  }
 }
 static uint32_t    nextFrameAt = 0;
 static uint32_t    animPauseUntil = 0;
@@ -246,24 +252,6 @@ bool characterInit(const char* name) {
 
 bool characterLoaded() { return loaded; }
 const Palette& characterPalette() { return pal; }
-
-// One-shot half-scale render to an arbitrary surface (M5.Lcd for the
-// landscape clock). Caller owns clearing. Advances frame timing so
-// animation runs even when characterTick() is bypassed.
-void characterRenderTo(TFT_eSPI* tgt, int cx, int cy) {
-  if (!gifOpen) return;   // caller opens via characterSetState(activeState)
-  TFT_eSPI* prevT = _tgt; bool prevP = peekMode; int px = gifX, py = gifY;
-  _tgt = tgt; peekMode = true;
-  gifX = cx - gifW / 4;
-  gifY = cy - gifH / 4;
-  uint32_t now = millis();
-  if (now >= nextFrameAt) {
-    int delayMs = 0;
-    if (!gif.playFrame(false, &delayMs)) { gif.reset(); gif.playFrame(false, &delayMs); }
-    nextFrameAt = now + (delayMs > 0 ? delayMs : 100);
-  }
-  _tgt = prevT; peekMode = prevP; gifX = px; gifY = py;
-}
 
 void characterSetPeek(bool peek) {
   if (peekMode == peek) return;
