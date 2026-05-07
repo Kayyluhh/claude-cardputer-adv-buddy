@@ -15,10 +15,11 @@ void init() {
 
 void setBrightness(uint8_t pct) {
   if (pct > 100) pct = 100;
-  // M5GFX takes 0..255; map 0..100 -> 0..255 with a small floor so "1%" is
-  // still visible (matches StickC's ScreenBreath(20+x*20) feel).
-  uint8_t b = pct == 0 ? 0 : (uint8_t)(20 + (pct * 235) / 100);
-  if (pct == 0) b = 0;
+  // Linear 0..100 -> 0..255 with rounding. brightLevel * 20 (0,20,40,60,80,100)
+  // gives 0/51/102/153/204/255; nap-dim uses pct=4..8 for "barely on" rather
+  // than full off. M5GFX's setBrightness is the only dial — there's no
+  // separate AXP ScreenBreath nor LDO2 power gate on the Adv.
+  uint8_t b = (uint8_t)((pct * 255 + 50) / 100);
   M5Cardputer.Display.setBrightness(b);
 }
 
