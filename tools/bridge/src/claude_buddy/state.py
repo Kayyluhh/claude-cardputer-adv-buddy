@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Literal
 
 SessionState = Literal["idle", "running", "waiting"]
@@ -47,7 +47,7 @@ class GlobalState:
     owner_name: str | None = None
 
 
-# Hint extractors per tool. Returns a string; truncated to 30 chars by caller.
+# Hint extractors per tool. Returns a string; _hint_for truncates to 30 chars.
 _HINT_EXTRACTORS = {
     "Bash": lambda ti: ti.get("command", ""),
     "Edit": lambda ti: _basename(ti.get("file_path", "")),
@@ -101,3 +101,49 @@ def derive_msg(event: str, payload: dict[str, Any], *, awaiting_permission: bool
             return "idle prompt"
         return None
     return None
+
+
+def _now_local() -> datetime:
+    """Indirection for testing — can be patched."""
+    return datetime.now()
+
+
+def append_entry(gs: GlobalState, msg: str) -> None:
+    """Append an HH:MM-stamped entry. Capped at maxlen=8 by deque."""
+    stamp = _now_local().strftime("%H:%M")
+    gs.entries.append(f"{stamp} {msg}")
+
+
+def wire_entries(gs: GlobalState) -> list[str]:
+    """Return the newest 4 entries in newest-first order — what rides the BLE wire."""
+    last_four = list(gs.entries)[-4:]
+    return list(reversed(last_four))
+
+
+def maybe_rollover_tokens(gs: GlobalState, *, today: date) -> None:
+    """If today != stored date, reset tokens_today to 0. First-run sets the date with no reset."""
+    if gs.tokens_today_date is None:
+        gs.tokens_today_date = today
+        return
+    if today != gs.tokens_today_date:
+        gs.tokens_today = 0
+        gs.tokens_today_date = today
+
+
+def reap_stale_sessions(gs: GlobalState, *, now: float, ttl_seconds: float) -> list[str]:
+    """Drop sessions idle for longer than ttl_seconds. Returns the list of dropped ids.
+
+    Resolves any pending prompts on dropped sessions to "ask" so awaiting hooks unblock.
+    """
+    dropped: list[str] = []
+    for sid, sess in list(gs.sessions.items()):
+        if now - sess.last_activity <= ttl_seconds:
+            continue
+        if sess.pending_prompt is not None:
+            pp = sess.pending_prompt
+            if not pp.future.done():
+                pp.future.set_result("ask")
+            gs.pending_by_id.pop(pp.tool_use_id, None)
+        gs.sessions.pop(sid)
+        dropped.append(sid)
+    return dropped
