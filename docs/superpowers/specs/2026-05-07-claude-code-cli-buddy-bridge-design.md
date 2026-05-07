@@ -12,16 +12,16 @@
 
 The `claude-cardputer-adv-buddy` firmware speaks the Hardware Buddy BLE protocol defined in `REFERENCE.md`. That protocol is normally driven by the Claude desktop apps (macOS / Windows). This spec defines a Python bridge that drives the **same wire protocol** from **Claude Code CLI** sessions, so the device displays CC permission prompts, transcript snippets, and token usage exactly as it does for the desktop apps.
 
-The bridge is a long-running local daemon plus six Claude Code skills that drive it. Hooks installed in `~/.claude/settings.json` forward CC events to the daemon over a Unix socket; the daemon multiplexes events into the BLE wire protocol and routes the device's permission decisions back to the originating hook.
+The bridge is a long-running local daemon plus six Claude Code skills that drive it (`buddy-run`, `buddy-stop`, `buddy-status`, `buddy-gifpush`, `buddy-mute`, `buddy-unmute`). One-time setup uses two plain Python scripts (`install.py`, `uninstall.py`) — they are run once after cloning, not as skills. Hooks installed in `~/.claude/settings.json` forward CC events to the daemon over a Unix socket; the daemon multiplexes events into the BLE wire protocol and routes the device's permission decisions back to the originating hook.
 
 ## 2. Goals
 
 1. Send heartbeat snapshots aggregating across all active CC sessions: `total`, `running`, `waiting`, `msg`, `entries`, `tokens`, `tokens_today`, and `prompt` when a permission decision is needed.
 2. Round-trip permission decisions: PreToolUse hook → daemon → device → daemon → hook → CC.
 3. Emit one-shot turn events (`{"evt":"turn", ...}`) per completed turn, enforcing the 4KB UTF-8 cap from `REFERENCE.md`.
-4. Folder push for GIF character packs via `/buddy-gif <folder>`.
-5. Six Claude Code skills as the user surface — no top-level CLI binary.
-6. Drop-in install via `/buddy-install`; clean removal via `/buddy-uninstall`.
+4. Folder push for GIF character packs via `/buddy-gifpush <folder>`.
+5. Per-session mute/unmute via `/buddy-mute` and `/buddy-unmute`.
+6. Six Claude Code skills as the user surface — no top-level CLI binary. Install/uninstall are one-time Python scripts run via `python3 tools/bridge/install.py` and `python3 tools/bridge/uninstall.py`.
 
 ## 3. Non-goals
 
@@ -48,43 +48,45 @@ Two alternate architectures (HTTP-on-localhost, file-queue) were considered and 
 ```
 claude-cardputer-adv-buddy/
 ├── .claude/skills/                     # auto-discovered when CC opens this repo
-│   ├── buddy-install/SKILL.md
-│   ├── buddy-uninstall/SKILL.md
 │   ├── buddy-run/SKILL.md
 │   ├── buddy-stop/SKILL.md
 │   ├── buddy-status/SKILL.md
-│   └── buddy-gif/SKILL.md
+│   ├── buddy-gifpush/SKILL.md
+│   ├── buddy-mute/SKILL.md
+│   └── buddy-unmute/SKILL.md
 ├── tools/bridge/
 │   ├── pyproject.toml                  # claude_buddy package; deps: bleak
-│   ├── README.md                       # short pointer to skill docs
+│   ├── README.md                       # short pointer to skill docs + install runbook
+│   ├── install.py                      # standalone bootstrap; run once after clone
+│   ├── uninstall.py                    # standalone teardown
 │   ├── src/claude_buddy/
 │   │   ├── __init__.py
 │   │   ├── daemon.py                   # asyncio main: hook server + BLE + state
 │   │   ├── hook_server.py              # Unix socket listener
 │   │   ├── ble_client.py               # bleak NUS client; reconnect; framing
-│   │   ├── state.py                    # SessionTable, msg derivation, tokens
+│   │   ├── state.py                    # SessionTable, msg derivation, tokens, mute set
 │   │   ├── persistence.py              # ~/.claude-buddy/state.json + config.json
 │   │   ├── transcript.py               # tails session JSONL for usage stats
 │   │   ├── wire.py                     # NUS UUIDs, JSON line frame helpers
 │   │   ├── hook.py                     # `python -m claude_buddy.hook` entry point
-│   │   ├── install.py                  # idempotent install logic
-│   │   ├── uninstall.py
 │   │   ├── run.py                      # daemon launcher (PID file, double-fork)
 │   │   ├── stop.py
 │   │   ├── status.py
 │   │   ├── push.py                     # folder push client
+│   │   ├── mute.py                     # /buddy-mute and /buddy-unmute helpers
 │   │   └── pair.py                     # interactive scan helper used by run.py
 │   └── tests/
 │       ├── test_state.py
 │       ├── test_install.py
 │       ├── test_hook_protocol.py
 │       ├── test_transcript.py
+│       ├── test_mute.py
 │       └── test_ble_fake.py            # in-process NUS peer for daemon tests
 └── docs/superpowers/specs/
     └── 2026-05-07-claude-code-cli-buddy-bridge-design.md   # this file
 ```
 
-After `/buddy-install` runs, the following user-level state exists:
+After `python3 tools/bridge/install.py` runs once, the following user-level state exists:
 
 ```
 ~/.claude-buddy/
@@ -92,6 +94,7 @@ After `/buddy-install` runs, the following user-level state exists:
 ├── python                              # symlink to venv/bin/python
 ├── config.json                         # {"device_address": "AA:BB:CC:DD:EE:FF", ...}
 ├── state.json                          # {"tokens_today": 31200, "date": "2026-05-07"}
+├── muted-sessions.json                 # {"<session_id>": <epoch_when_muted>}
 ├── daemon.log
 └── daemon.pid
 
@@ -256,6 +259,7 @@ class PendingPrompt:
 class GlobalState:
     sessions: dict[str, Session]
     pending_by_id: dict[str, PendingPrompt]   # for routing BLE permission acks
+    muted_sessions: set[str]                  # persisted; events from these ids skip device
     tokens_cumulative: int                    # since daemon start
     tokens_today: int                         # persisted
     tokens_today_date: date                   # persisted
@@ -385,9 +389,9 @@ Daemon accepts hook events normally; heartbeat snapshots have `prompt` omitted b
 
 Each prompt is keyed by `tool_use_id`, which CC guarantees unique per tool call. The daemon's `pending_by_id` map routes BLE acks to the right future. Snapshots only carry **one** `prompt` field at a time (the most recent); the device shows the newest prompt and earlier ones still resolve when their acks arrive (the device tracks ids and only acks the prompt currently displayed — but the daemon doesn't depend on that). If the device acks an unknown id, the daemon logs and ignores it.
 
-## 10. Folder push (`/buddy-gif`)
+## 10. Folder push (`/buddy-gifpush`)
 
-Triggered by `/buddy-gif <folder>` or natural-language phrasing. The skill:
+Triggered by `/buddy-gifpush <folder>` or natural-language phrasing. The skill:
 
 1. Resolves folder argument to absolute path; rejects if missing or not a directory.
 2. Sums file sizes; rejects if total > 1.8 MB.
@@ -401,43 +405,38 @@ If the device fails to ack `char_begin` within ~3s, the daemon aborts and report
 
 ## 11. Install / uninstall
 
-### 11.1 `/buddy-install`
+Install and uninstall are **standalone Python scripts**, not skills — they run once per machine and a slash-command wrapper would be unnecessary ceremony for a one-shot. They live at `tools/bridge/install.py` and `tools/bridge/uninstall.py` and run on the system `python3` (no `claude_buddy` venv required to start, since the install script's first job is to create that venv).
 
-Idempotent. The skill SKILL.md handles the bootstrap (steps 1–3 below) inline via Bash, because on first run there is no installed `claude_buddy` package yet to host the install logic. Once the venv is set up, control passes to `claude_buddy.install` for the rest.
+### 11.1 `python3 tools/bridge/install.py`
 
-**Bootstrap (skill body, runs Bash directly):**
+Idempotent. Run once after cloning the firmware repo. Accepts `--quiet` to skip the BT permission walk-through.
 
-1. Find the repo root: `REPO=$(git rev-parse --show-toplevel)` (the skill is invoked from within the firmware repo). Verify `$REPO/tools/bridge/pyproject.toml` exists; bail with a helpful message if not.
+1. Find the repo root: `Path(__file__).resolve().parents[1]` is `tools/bridge/`; the repo root is one level up. Verify `pyproject.toml` exists in `tools/bridge/`.
 2. Create `~/.claude-buddy/` if missing. Create `~/.claude-buddy/venv/` via `python3 -m venv` if missing.
-3. `~/.claude-buddy/venv/bin/pip install -e "$REPO/tools/bridge"` (editable install so firmware-repo edits to the package take effect immediately). Symlink `~/.claude-buddy/python → ~/.claude-buddy/venv/bin/python` (idempotent: `ln -sf`).
-
-**Main install (delegates to the now-installed module):**
-
-4. Run `~/.claude-buddy/python -m claude_buddy.install --repo "$REPO"`.
-
-The install module:
-
-5. Writes `~/.claude/hooks/buddy_hook.py` (shim that `exec`s the venv python with `-m claude_buddy.hook`). Mode 0755.
-6. For each skill in `<repo>/.claude/skills/buddy-*`, creates symlink `~/.claude/skills/buddy-<x> → <repo>/.claude/skills/buddy-<x>`. Refuses to overwrite existing non-symlink files at those paths.
-7. Reads `~/.claude/settings.json` (or initializes `{}`). For each event in `{PreToolUse, PostToolUse, UserPromptSubmit, Stop, SessionStart, SessionEnd, Notification}`:
+3. `~/.claude-buddy/venv/bin/pip install -e <repo>/tools/bridge` (editable install so firmware-repo edits to the package take effect immediately). Symlink `~/.claude-buddy/python → ~/.claude-buddy/venv/bin/python` (idempotent: `ln -sf`).
+4. Write `~/.claude/hooks/buddy_hook.py` (shim that `exec`s the venv python with `-m claude_buddy.hook`). Mode 0755.
+5. For each skill in `<repo>/.claude/skills/buddy-*`, create symlink `~/.claude/skills/buddy-<x> → <repo>/.claude/skills/buddy-<x>`. Refuse to overwrite existing non-symlink files at those paths.
+6. Read `~/.claude/settings.json` (or initialize `{}`). For each event in `{PreToolUse, PostToolUse, UserPromptSubmit, Stop, SessionStart, SessionEnd, Notification}`:
    - If a top-level matcher object with `_buddy: true` already exists in `hooks[event]`, leave it alone (idempotent).
    - Otherwise append `{ "_buddy": true, "matcher": "*", "hooks": [{ "type": "command", "command": "<HOME>/.claude/hooks/buddy_hook.py", "timeout": 60 }] }`.
 
-   Writes via the standard atomic pattern: serialize to `settings.json.tmp` in the same directory, `fsync`, `os.rename` over the original. A backup of the pre-edit file is kept at `~/.claude/settings.json.buddy-bak` (overwritten on each install run).
-8. Persists `<repo>` path to `~/.claude-buddy/config.json` so other skills can find canonical paths if needed.
-9. Prints BT permission warning: "First `/buddy-run` will trigger a macOS Bluetooth permission dialog tied to `~/.claude-buddy/python`. Click Allow."
-10. Prints install summary: paths created, settings.json entries added.
+   Write via the standard atomic pattern: serialize to `settings.json.tmp` in the same directory, `fsync`, `os.rename` over the original. A backup of the pre-edit file is kept at `~/.claude/settings.json.buddy-bak` (overwritten on each install run).
+7. Persist `<repo>` path and version to `~/.claude-buddy/config.json` so the skills and daemon can find canonical paths.
+8. Print BT permission warning: "First `/buddy-run` will trigger a macOS Bluetooth permission dialog tied to `~/.claude-buddy/python`. Click Allow."
+9. Print install summary: paths created, settings.json entries added, next-step hint to run `/buddy-run` from any CC session inside the firmware repo (or once skills are symlinked, from anywhere).
 
-### 11.2 `/buddy-uninstall`
+### 11.2 `python3 tools/bridge/uninstall.py`
 
 1. Remove `_buddy: true` matcher entries from each event in `~/.claude/settings.json`, using the same atomic write pattern as install (tmp + fsync + rename, with `.buddy-bak` backup). Leave hand-edited entries untouched.
 2. Delete `~/.claude/hooks/buddy_hook.py`.
 3. Remove skill symlinks from `~/.claude/skills/buddy-*` (only if they are symlinks pointing into the firmware repo; refuse to delete real files).
-4. Print: "to fully purge, also rm -rf `~/.claude-buddy/` (this preserves token history and BLE bond)."
+4. Print: "to fully purge, also `rm -rf ~/.claude-buddy/` (this preserves token history, mute state, and BLE bond)."
 
 ### 11.3 Per-project disable
 
-`buddy_hook.py`, before any work, checks for `<cwd>/.claude-buddy-disabled` and exits 0 immediately if present. Drop a sentinel file into any repo to silence the bridge there without uninstalling. Documented in `tools/bridge/README.md`.
+`buddy_hook.py`, before any work, reads the merged Claude settings (project-local takes precedence) and checks for `_buddy_disabled: true` at the top level of `<cwd>/.claude/settings.local.json`. If true, the hook exits 0 immediately. This keeps disable state in the same JSON the rest of CC's per-project config lives in — discoverable via `git`, `grep`, and `cat`.
+
+Documented in `tools/bridge/README.md` with a one-liner: `echo '{"_buddy_disabled": true}' > .claude/settings.local.json` (or merge into existing).
 
 ## 12. Skills
 
@@ -445,12 +444,12 @@ Each SKILL.md uses imperative form, frontmatter with third-person description an
 
 | Skill | Module | Args | Purpose |
 |---|---|---|---|
-| `buddy-install` | `claude_buddy.install` | none | Set up venv, symlinks, settings.json edits. |
-| `buddy-uninstall` | `claude_buddy.uninstall` | none | Reverse install. |
 | `buddy-run` | `claude_buddy.run` | none (interactive scan first time) | Background-spawn daemon; tail log 3s; report state. |
 | `buddy-stop` | `claude_buddy.stop` | none | SIGTERM daemon, clean up socket and PID file. |
-| `buddy-status` | `claude_buddy.status` | none | Print daemon/BLE state, sessions, tokens, recent entries. |
-| `buddy-gif` | `claude_buddy.push` | `<folder>` | Push folder to device via daemon. |
+| `buddy-status` | `claude_buddy.status` | none | Print daemon/BLE state, sessions, tokens, recent entries, mute set. |
+| `buddy-gifpush` | `claude_buddy.push` | `<folder>` | Push folder to device via daemon. |
+| `buddy-mute` | `claude_buddy.mute` | none | Mute the current CC session — daemon stops sending its events to the device. |
+| `buddy-unmute` | `claude_buddy.mute --unmute` | none | Restore device events for the current session. |
 
 ### 12.1 First-run pairing
 
@@ -474,6 +473,19 @@ The skill then `tail -f`-equivalent watches `~/.claude-buddy/daemon.log` for up 
 - any `ERROR` line → surface verbatim.
 
 Returns within 3 seconds either way.
+
+### 12.3 Mute mechanics
+
+The daemon keeps a set of muted session ids in `GlobalState.muted_sessions`, persisted to `~/.claude-buddy/muted-sessions.json`. When dispatching events, the daemon checks this set and silently skips heartbeat updates and turn events sourced from a muted session id. (Permission round-trip is also skipped: a PreToolUse from a muted session resolves immediately to `decision: "ask"` so CC's native UI runs — that way muting can't lock you out of approvals.)
+
+`/buddy-mute` and `/buddy-unmute` need to know **which session is current**. Two-tier discovery:
+
+1. **Preferred:** read `$CLAUDE_SESSION_ID` from the skill's bash environment. If CC exposes the session id to slash-command subprocesses (to be verified during implementation), this is deterministic.
+2. **Fallback:** ask the daemon `{op: "current_session", cwd: "<cwd>"}`. The daemon returns the session id whose `cwd` matches and whose `last_activity` is most recent. If no cwd match, returns the globally most-recent session. If no sessions at all, returns null and the skill reports "no active session to mute."
+
+The skill then sends `{op: "mute", session_id: "..."}` (or `{op: "unmute", session_id}`) to the daemon. Mute state survives daemon restarts via the persisted set; on restart, any muted session ids that no longer exist (because the reaper would have cleaned them) are pruned.
+
+`/buddy-status` includes a `muted_sessions` line listing how many sessions are muted and (if any) the truncated tails of their session ids.
 
 ## 13. Errors and edge cases
 
@@ -538,13 +550,14 @@ Daemon persists on every change to `tokens_today`. `tokens_lifetime` is bonus te
 
 Documented in `tools/bridge/README.md`:
 
-1. `/buddy-install` (one time)
+1. `python3 tools/bridge/install.py` (one time, from the repo root)
 2. `/buddy-run` — verify "BLE connected to Clawd"
 3. Open a CC session; run a Bash command. Verify device shows `approve: Bash` and the command hint.
 4. Approve on device. Verify CC proceeds.
 5. Run `ls /` (auto-approved tools): verify device shows `Bash: ls /` then `ran: Bash`.
-6. Drop `characters/bufo` via `/buddy-gif characters/bufo`. Verify device renders the new pet.
-7. `/buddy-stop`. Verify clean shutdown.
+6. Drop `characters/bufo` via `/buddy-gifpush characters/bufo`. Verify device renders the new pet.
+7. `/buddy-mute` then run another command — verify device shows nothing for this session. `/buddy-unmute`, retry — events resume.
+8. `/buddy-stop`. Verify clean shutdown.
 
 ## 16. Risks and open questions
 
@@ -553,7 +566,9 @@ Documented in `tools/bridge/README.md`:
 3. **Hook timeout interaction with PreToolUse latency.** A 60-second `timeout` setting plus a 5-second daemon wait is comfortable, but if the daemon's socket accept hangs longer than 5s the hook will still time out at 60s, which CC may surface as a tool-call failure. Mitigation: hook uses `socket.settimeout(0.5)` on connect, `5.0` on read, never waits longer than 6 seconds total.
 4. **Notification `permission_prompt` overlap with PreToolUse.** Both fire when CC prompts for permission. The bridge owns PreToolUse (canonical); Notification is informational only. Don't double-emit prompts. Mitigation: ignore `Notification` of type `permission_prompt`; only act on the other notification types.
 5. **State persistence races.** Daemon writes `state.json` on every snapshot. SIGKILL during write can corrupt. Mitigation: write to `state.json.tmp`, fsync, rename — atomic on POSIX.
-6. **Skill discovery before install.** Project-local `.claude/skills/buddy-*` are discovered when CC is opened in the firmware repo. **A user with a fresh clone runs `/buddy-install` from inside the repo directory.** This is documented in `README.md`. After install, the same skills work in any directory via the global symlinks.
+6. **Skill discovery before install.** Project-local `.claude/skills/buddy-*` are discovered whenever CC is opened in the firmware repo, but they fail noisily until the venv exists. **The user runs `python3 tools/bridge/install.py` from the repo root once after cloning** (not via a skill — install is one-shot per machine). After that, the skills are also symlinked into `~/.claude/skills/` and work from any directory.
+
+7. **`$CLAUDE_SESSION_ID` availability in skill subprocesses.** §12.3 prefers reading the session id from the environment for /buddy-mute. Whether CC exports `CLAUDE_SESSION_ID` (or some equivalent) to slash-command bash subprocesses needs verification during implementation. Fallback path (daemon picks the cwd-matching most-recent session) is implemented either way.
 
 ## 17. Out of scope (future ideas, not this spec)
 
