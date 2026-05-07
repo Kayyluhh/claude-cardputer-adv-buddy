@@ -1,0 +1,8 @@
+# ESP32-S3FN8 8MB flash layout for Cardputer-Adv.
+# Single app slot (3 MB) + LittleFS (~4.8 MB) for character packs.
+# No OTA — the desktop "Hardware Buddy" flow flashes via USB.
+# Name,    Type, SubType, Offset,   Size,
+nvs,       data, nvs,     0x9000,   0x6000,
+phy_init,  data, phy,     0xf000,   0x1000,
+app0,      app,  ota_0,   0x10000,  0x300000,
+littlefs,  data, spiffs,  0x310000, 0x4e0000,
