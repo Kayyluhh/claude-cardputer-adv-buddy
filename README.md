@@ -17,15 +17,22 @@ wakes when sessions start, gets visibly impatient when an approval prompt is
 waiting, and lets you approve or deny right from the device.
 
 <p align="center">
-  <img src="docs/device.jpg" alt="M5StickC Plus running the buddy firmware" width="500">
+  <img src="docs/device.jpg" alt="M5Stack Cardputer-Adv running the buddy firmware" width="500">
 </p>
 
 ## Hardware
 
-The firmware targets ESP32 with the Arduino framework. As written, it
-depends on the M5StickCPlus library for its display, IMU, and button
-drivers—so you'll need that board, or a fork that swaps those drivers for
-your own pin layout.
+This fork targets the **M5Stack Cardputer-Adv** (Stamp-S3A core,
+ESP32-S3FN8, 8 MB flash, 240×135 landscape ST7789V2, 56-key keyboard via
+TCA8418 I²C expander, BMI270 IMU, ES8311 audio codec + 1 W speaker, RGB
+LED, 1750 mAh battery). All hardware-specific knowledge lives in the
+M5Cardputer 1.1.1 library; everything above the Platform shim
+(`src/platform.{h,cpp}`) and Input layer (`src/input.{h,cpp}`) is
+hardware-agnostic.
+
+If you have the original Cardputer or an M5StickC Plus, this branch
+won't run on it as-is — see the upstream repo
+(`anthropics/claude-desktop-buddy`) for the StickC Plus build.
 
 ## Flashing
 
@@ -34,17 +41,22 @@ Install
 then:
 
 ```bash
-pio run -t upload
+pio run -e m5stack-cardputer-adv -t upload
 ```
+
+If the board doesn't enter download mode automatically, set the side
+power switch to OFF, hold the **G0** button on the side, plug in USB
+while still holding G0, then release after about a second. Re-run
+`pio run -t upload`.
 
 If you're starting from a previously-flashed device, wipe it first:
 
 ```bash
-pio run -t erase && pio run -t upload
+pio run -e m5stack-cardputer-adv -t erase && pio run -e m5stack-cardputer-adv -t upload
 ```
 
-Once running, you can also wipe everything from the device itself: **hold A
-→ settings → reset → factory reset → tap twice**.
+Once running, you can also wipe everything from the device itself:
+**hold Enter → settings → reset → factory reset → press Enter twice**.
 
 ## Pairing
 
@@ -68,24 +80,33 @@ If discovery isn't finding the stick:
 
 ## Controls
 
-|                         | Normal               | Pet         | Info        | Approval    |
-| ----------------------- | -------------------- | ----------- | ----------- | ----------- |
-| **A** (front)           | next screen          | next screen | next screen | **approve** |
-| **B** (right)           | scroll transcript    | next page   | next page   | **deny**    |
-| **Hold A**              | menu                 | menu        | menu        | menu        |
-| **Power** (left, short) | toggle screen off    |             |             |             |
-| **Power** (left, ~6s)   | hard power off       |             |             |             |
-| **Shake**               | dizzy                |             |             | —           |
-| **Face-down**           | nap (energy refills) |             |             |             |
+The Cardputer-Adv has a 56-key keyboard. The mapping is keyboard-first
+(Enter / Esc / Tab) with letter shortcuts where they help.
 
-The screen auto-powers-off after 30s of no interaction (kept on while an
-approval prompt is up). Any button press wakes it.
+|                  | Normal                 | Pet         | Info         | Menu / settings | Approval    |
+| ---------------- | ---------------------- | ----------- | ------------ | --------------- | ----------- |
+| **Enter**        | cycle screen           | next page   | next page    | confirm         | **approve** |
+| **Esc / Del**    | —                      | back        | back         | back            | **deny**    |
+| **Tab** / **;**  | —                      | next page   | next page    | next item       | —           |
+| **Hold Enter**   | open menu              | open menu   | open menu    | close menu      | (n/a)       |
+| **`** (backtick) | cycle home → pet → info | "           | "            | —               | —           |
+| **a / d**        | —                      | —           | —            | —               | approve / deny |
+| **, / .**        | scroll transcript ←/→  | —           | —            | —               | —           |
+| **Shake**        | dizzy                  |             |              |                 | —           |
+| **Face-down**    | nap (energy refills)   |             |              |                 |             |
+
+Side **power switch** is hardware-only — no programmable power-off on
+the Adv. The screen auto-powers-off after 30s of no interaction (stays
+on while an approval prompt is up or the device is on USB power). Any
+keystroke wakes it.
 
 ## ASCII pets
 
-Eighteen pets, each with seven animations (sleep, idle, busy, attention,
-celebrate, dizzy, heart). Menu → "next pet" cycles them with a counter.
-Choice persists to NVS.
+**Twenty** pets, each with seven animations (sleep, idle, busy,
+attention, celebrate, dizzy, heart). **Settings → ascii pet** cycles
+them with a counter; choice persists to NVS. The default 18 are upstream;
+`doge` and `llama` are cherry-picked from
+[y88huang/claude-desktop-buddy-cardputer](https://github.com/y88huang/claude-desktop-buddy-cardputer).
 
 ## GIF pets
 
@@ -122,11 +143,13 @@ State values can be a single filename or an array. Arrays rotate: each
 loop-end advances to the next GIF, useful for an idle activity carousel so
 the home screen doesn't loop one clip forever.
 
-GIFs are 96px wide; height up to ~140px stays on a 135×240 portrait screen.
-Crop tight to the character — transparent margins waste screen and shrink
-the sprite. `tools/prep_character.py` handles the resize: feed it source
-GIFs at any sizes and it produces a 96px-wide set where the character is the
-same scale in every state.
+GIFs are up to 120 px wide and ~120 px tall — the pet renders inside the
+left buddy column of the 240×135 landscape canvas, vertically centered.
+Crop tight to the character; transparent margins waste pixels.
+`tools/prep_character.py` handles the resize: feed it source GIFs at any
+size and it produces a 96 px-wide set where the character is the same
+scale in every state. (96 px works fine; the column gives ~12 px of
+breathing room on either side.)
 
 The whole folder must fit under 1.8MB —
 `gifsicle --lossy=80 -O3 --colors 64` typically cuts 40–60%.
@@ -153,16 +176,24 @@ If you're iterating on a character and would rather skip the BLE round-trip,
 
 ```
 src/
-  main.cpp       — loop, state machine, UI screens
-  buddy.cpp      — ASCII species dispatch + render helpers
-  buddies/       — one file per species, seven anim functions each
-  ble_bridge.cpp — Nordic UART service, line-buffered TX/RX
-  character.cpp  — GIF decode + render
-  data.h         — wire protocol, JSON parse
-  xfer.h         — folder push receiver
-  stats.h        — NVS-backed stats, settings, owner, species choice
-characters/      — example GIF character packs
-tools/           — generators and converters
+  main_adv.cpp     — loop, state machine, UI screens
+  platform.{h,cpp} — thin shim over M5Unified (display, power, IMU, RTC,
+                     audio, LED) so the rest of the code never touches
+                     hardware APIs directly
+  input.{h,cpp}    — edge-triggered keyboard wrapper around
+                     M5Cardputer.Keyboard with long-press tracking
+  gfx_compat.h     — TFT_eSprite -> M5Canvas typedef alias so the buddy
+                     renderer keeps the legacy type name
+  buddy.cpp        — ASCII species dispatch + render helpers
+  buddies/         — one file per species (20), seven anim functions each
+  ble_bridge.cpp   — Nordic UART service, line-buffered TX/RX
+  character.cpp    — GIF decode + render (LittleFS + AnimatedGIF)
+  data.h           — wire protocol, JSON parse
+  xfer.h           — folder push receiver
+  stats.h          — NVS-backed stats, settings, owner, species choice
+characters/        — example GIF character packs
+tools/             — generators and converters
+partitions_8mb.csv — 3 MB app + 4.8 MB LittleFS, no OTA
 ```
 
 ## Availability
