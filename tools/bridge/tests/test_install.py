@@ -50,6 +50,21 @@ class TestSettingsMerge:
         ]
         assert "/usr/bin/my-tool" in commands
 
+
+class TestPathDerivation:
+    def test_repo_root_points_at_repo(self):
+        # repo_root should be the firmware repo root (containing .git, README.md, tools/, etc.)
+        # NOT tools/ itself.
+        root = install_mod.repo_root()
+        assert (root / "tools").is_dir()
+        assert (root / "tools" / "bridge").is_dir()
+        # The bridge dir should be a sibling-or-deeper of repo_root, not the same.
+        assert install_mod.bridge_dir() != root
+
+    def test_bridge_dir_points_at_bridge(self):
+        bridge = install_mod.bridge_dir()
+        assert (bridge / "pyproject.toml").is_file()
+        assert bridge.name == "bridge"
     def test_writes_atomically(self, tmp_path):
         settings = tmp_path / "settings.json"
         install_mod.merge_hook_entries(settings, hook_path="/tmp/buddy_hook.py")

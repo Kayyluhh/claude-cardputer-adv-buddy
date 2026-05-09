@@ -16,7 +16,7 @@ HOOK_EVENTS = [
 
 
 def repo_root() -> Path:
-    return Path(__file__).resolve().parents[1]  # claude-cardputer-adv-buddy/
+    return Path(__file__).resolve().parents[2]  # claude-cardputer-adv-buddy/
 
 
 def bridge_dir() -> Path:
