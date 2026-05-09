@@ -55,3 +55,35 @@ class TestSettingsMerge:
         install_mod.merge_hook_entries(settings, hook_path="/tmp/buddy_hook.py")
         assert not (tmp_path / "settings.json.tmp").exists()
         assert (tmp_path / "settings.json.buddy-bak").exists() or settings.exists()
+
+
+UNINSTALL_PATH = Path(__file__).resolve().parents[1] / "uninstall.py"
+spec_u = importlib.util.spec_from_file_location("buddy_uninstall", UNINSTALL_PATH)
+uninstall_mod = importlib.util.module_from_spec(spec_u)
+sys.modules["buddy_uninstall"] = uninstall_mod
+spec_u.loader.exec_module(uninstall_mod)
+
+
+class TestUninstallSettings:
+    def test_removes_buddy_entries(self, tmp_path):
+        settings = tmp_path / "settings.json"
+        install_mod.merge_hook_entries(settings, hook_path="/tmp/buddy_hook.py")
+        uninstall_mod.remove_hook_entries(settings)
+        data = json.loads(settings.read_text())
+        for evt in install_mod.HOOK_EVENTS:
+            assert all(not e.get("_buddy") for e in data["hooks"].get(evt, []))
+
+    def test_preserves_user_entries(self, tmp_path):
+        settings = tmp_path / "settings.json"
+        settings.write_text(json.dumps({
+            "hooks": {"PreToolUse": [{"matcher": "Edit", "hooks": [{"type": "command", "command": "/usr/bin/my-tool"}]}]}
+        }))
+        install_mod.merge_hook_entries(settings, hook_path="/tmp/buddy_hook.py")
+        uninstall_mod.remove_hook_entries(settings)
+        data = json.loads(settings.read_text())
+        commands = [
+            h["command"]
+            for entry in data["hooks"].get("PreToolUse", [])
+            for h in entry.get("hooks", [])
+        ]
+        assert "/usr/bin/my-tool" in commands
