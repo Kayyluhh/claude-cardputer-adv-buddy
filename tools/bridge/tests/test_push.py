@@ -160,6 +160,56 @@ class TestFolderPush:
             d.shutdown_event.set()
             await asyncio.wait_for(task, timeout=2.0)
 
+    async def test_device_silent_after_char_begin_timeout(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        state_dir = tmp_path / "home" / ".claude-buddy"
+        state_dir.mkdir(parents=True)
+        persistence.save_config(state_dir / "config.json", persistence.Config(
+            device_address="AA", device_name="FakeBuddy",
+        ))
+
+        class _SilentAfterCharBegin(BleFake):
+            """Acks char_begin then never replies again."""
+            async def _react(self, msg: dict) -> None:
+                cmd = msg.get("cmd")
+                if cmd == "char_begin":
+                    await self.notify({"ack": "char_begin", "ok": True})
+                # Drop everything else - simulates device hang.
+
+        fake = _SilentAfterCharBegin()
+        sock_path = tmp_path / "buddy.sock"
+        d = daemon_mod.Daemon(
+            state_dir=state_dir, sock_path=sock_path,
+            ble_factory=lambda addr: _StubBleakClient(addr, fake),
+        )
+        task = asyncio.create_task(d.run())
+        await asyncio.sleep(0.1)
+        try:
+            folder = tmp_path / "char"
+            folder.mkdir()
+            (folder / "a.txt").write_bytes(b"x" * 50)
+
+            reader, writer = await asyncio.open_unix_connection(str(sock_path))
+            writer.write(json.dumps({"op": "push", "path": str(folder)}).encode() + b"\n")
+            await writer.drain()
+            stages = []
+            # Read until we see done or error. The daemon's wait_ack default timeout
+            # is 5s, so error will land within ~6s.
+            while True:
+                line = await asyncio.wait_for(reader.readline(), timeout=8.0)
+                if not line:
+                    break
+                stages.append(json.loads(line))
+                if stages[-1].get("stage") in ("done", "error"):
+                    break
+            writer.close()
+            await writer.wait_closed()
+            assert stages[-1]["stage"] == "error"
+            assert "timeout" in stages[-1]["msg"].lower()
+        finally:
+            d.shutdown_event.set()
+            await asyncio.wait_for(task, timeout=2.0)
+
     async def test_device_declines_file(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path / "home"))
         state_dir = tmp_path / "home" / ".claude-buddy"

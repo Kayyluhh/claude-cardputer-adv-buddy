@@ -69,6 +69,7 @@ class Daemon:
                 self.state.device_name = self.config.device_name
                 self.state.owner_name = self.config.owner_name
                 await self._send_one_shots()
+                await self._send_heartbeat(force=True)  # immediate state, not 10s wait
             except Exception:
                 log.exception("BLE connect failed; daemon continues without device")
                 self.state.ble_connected = False
@@ -401,7 +402,7 @@ class Daemon:
 
                 with open(f, "rb") as fh:
                     while True:
-                        chunk = fh.read(120)  # 120 raw bytes = 160 base64 chars; envelope total ≈182 bytes ≈ MTU-3 on macOS (185)
+                        chunk = fh.read(117)  # 117 raw bytes = 156 base64 chars; envelope (with \n) = 179 bytes, safely under macOS 182-byte ATT Write Command limit
                         if not chunk:
                             break
                         b64 = base64.b64encode(chunk).decode("ascii")
@@ -422,6 +423,8 @@ class Daemon:
                 await respond({"stage": "error", "msg": "device char_end failed"})
                 return
             await respond({"stage": "done"})
+        except asyncio.TimeoutError:
+            await respond({"stage": "error", "msg": "device ack timeout"})
         finally:
             self._push_ack_queue = None
 
