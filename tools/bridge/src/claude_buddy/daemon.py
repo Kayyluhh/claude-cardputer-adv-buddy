@@ -335,8 +335,11 @@ class Daemon:
 def main() -> int:
     """Entrypoint when run as `python -m claude_buddy.daemon`. Used by run.py."""
     import os
-    home = Path(os.environ.get("HOME", "~")).expanduser()
-    state_dir = home / ".claude-buddy"
+    if env_dir := os.environ.get("BUDDY_STATE_DIR"):
+        state_dir = Path(env_dir)
+    else:
+        home = Path(os.environ.get("HOME", "~")).expanduser()
+        state_dir = home / ".claude-buddy"
     state_dir.mkdir(parents=True, exist_ok=True)
     sock_path = Path("/tmp/claude-buddy.sock")
     logging.basicConfig(
