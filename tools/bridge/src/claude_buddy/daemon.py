@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import logging
 import time
 from datetime import date
@@ -49,6 +51,7 @@ class Daemon:
         self._ble: BleClient | None = None
         self._last_snapshot_repr: str | None = None
         self._last_heartbeat_at = 0.0
+        self._push_ack_queue: asyncio.Queue | None = None
 
     # ---- lifecycle ----
 
@@ -224,6 +227,13 @@ class Daemon:
         if msg.get("cmd") == "permission":
             decision = "allow" if msg.get("decision") == "once" else "deny"
             self._resolve_pending(msg.get("id", ""), decision)
+            return
+        # Route ack messages to in-flight push, if any.
+        if "ack" in msg and self._push_ack_queue is not None:
+            try:
+                self._push_ack_queue.put_nowait(msg)
+            except Exception:
+                pass
 
     async def _send_one_shots(self) -> None:
         if self._ble is None:
@@ -326,10 +336,94 @@ class Daemon:
             self.state.muted_sessions,
         )
 
-    # ---- folder push (filled in Task 16) ----
+    # ---- folder push ----
 
     async def _handle_push(self, msg: dict, respond) -> None:
-        await respond({"stage": "error", "msg": "push not yet implemented"})
+        path = Path(msg.get("path", ""))
+        if not path.is_dir():
+            await respond({"stage": "error", "msg": f"not a directory: {path}"})
+            return
+
+        # Enumerate regular files (no recursion, dotfiles skipped).
+        files: list[Path] = sorted(
+            p for p in path.iterdir()
+            if p.is_file() and not p.name.startswith(".")
+        )
+        total = sum(p.stat().st_size for p in files)
+        if total > 1_800_000:
+            await respond({"stage": "error",
+                           "msg": f"folder size {total} bytes exceeds 1.8 MB cap"})
+            return
+
+        # Determine pack name.
+        pack_name = path.name
+        manifest = path / "manifest.json"
+        if manifest.exists():
+            try:
+                pack_name = json.loads(manifest.read_text()).get("name", pack_name)
+            except json.JSONDecodeError:
+                pass
+
+        if self._ble is None or not self.state.ble_connected:
+            await respond({"stage": "error", "msg": "device not connected"})
+            return
+
+        if self._push_ack_queue is not None:
+            await respond({"stage": "error", "msg": "push already in progress"})
+            return
+
+        # Acks come asynchronously through _on_ble_message; route them via a queue here.
+        ack_q: asyncio.Queue[dict] = asyncio.Queue()
+        self._push_ack_queue = ack_q
+
+        async def wait_ack(name: str, timeout: float = 5.0) -> dict:
+            while True:
+                m = await asyncio.wait_for(ack_q.get(), timeout=timeout)
+                if m.get("ack") == name:
+                    return m
+
+        try:
+            await self._ble.send({"cmd": "char_begin", "name": pack_name, "total": total})
+            ack = await wait_ack("char_begin", timeout=3.0)
+            if not ack.get("ok"):
+                await respond({"stage": "error", "msg": "device declined push"})
+                return
+            await respond({"stage": "begin", "name": pack_name, "total": total})
+
+            for f in files:
+                size = f.stat().st_size
+                await self._ble.send({"cmd": "file", "path": f.name, "size": size})
+                ack = await wait_ack("file")
+                if not ack.get("ok"):
+                    await respond({"stage": "error", "msg": f"device rejected file {f.name}"})
+                    return
+                await respond({"stage": "file", "name": f.name, "size": size})
+
+                with open(f, "rb") as fh:
+                    while True:
+                        chunk = fh.read(120)  # 120 raw bytes = 160 base64 chars; envelope total ≈182 bytes ≈ MTU-3 on macOS (185)
+                        if not chunk:
+                            break
+                        b64 = base64.b64encode(chunk).decode("ascii")
+                        await self._ble.send({"cmd": "chunk", "d": b64})
+                        ack = await wait_ack("chunk")
+                        await respond({"stage": "chunk", "n": ack.get("n", 0)})
+
+                await self._ble.send({"cmd": "file_end"})
+                ack = await wait_ack("file_end")
+                if not ack.get("ok"):
+                    await respond({"stage": "error", "msg": f"file {f.name} write incomplete"})
+                    return
+                await respond({"stage": "file_end", "size": ack.get("n", 0)})
+
+            await self._ble.send({"cmd": "char_end"})
+            ack = await wait_ack("char_end")
+            if not ack.get("ok"):
+                await respond({"stage": "error", "msg": "device char_end failed"})
+                return
+            await respond({"stage": "done"})
+        finally:
+            self._push_ack_queue = None
 
 
 def main() -> int:

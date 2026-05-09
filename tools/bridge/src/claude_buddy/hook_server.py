@@ -46,13 +46,7 @@ class HookServer:
                 log.warning("hook server: bad JSON from client; closing")
                 return
 
-            response_sent = False
-
             async def respond(payload: dict) -> None:
-                nonlocal response_sent
-                if response_sent:
-                    return
-                response_sent = True  # set before any await; closes the race window
                 writer.write((json.dumps(payload) + "\n").encode("utf-8"))
                 await writer.drain()
 
