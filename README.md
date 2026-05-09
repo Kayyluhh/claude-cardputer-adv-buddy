@@ -2,8 +2,11 @@
 
 Claude for macOS and Windows can connect Claude Cowork and Claude Code to
 maker devices over BLE, so developers and makers can build hardware that
-displays permission prompts, recent messages, and other interactions. We've
-been impressed by the creativity of the maker community around Claude -
+displays permission prompts, recent messages, and other interactions. This
+fork adds a Python bridge under `tools/bridge/` so **Claude Code CLI
+sessions can drive the same firmware without the desktop apps** — see the
+[Claude Code CLI bridge](#claude-code-cli-bridge) section below. We've
+been impressed by the creativity of the maker community around Claude —
 providing a lightweight, opt-in API is our way of making it easier to build
 fun little hardware devices that integrate with Claude.
 
@@ -16,9 +19,7 @@ approvals and interaction with Claude. It sleeps when nothing's happening,
 wakes when sessions start, gets visibly impatient when an approval prompt is
 waiting, and lets you approve or deny right from the device.
 
-<p align="center">
-  <img src="docs/device.jpg" alt="M5Stack Cardputer-Adv running the buddy firmware" width="500">
-</p>
+
 
 ## Hardware
 
@@ -77,6 +78,59 @@ If discovery isn't finding the stick:
 
 - Make sure it's awake (any button press)
 - Check the stick's settings menu → bluetooth is on
+
+## Claude Code CLI bridge
+
+If you'd rather drive the firmware from Claude Code CLI sessions instead
+of (or alongside) the desktop apps, this fork includes a Python bridge
+under `tools/bridge/`. It runs as a long-lived asyncio daemon that
+aggregates events from any active CC session, multiplexes them onto the
+same Hardware Buddy BLE protocol the desktop apps use, and round-trips
+permission decisions back to CC.
+
+### One-time install
+
+From the repo root:
+
+```bash
+python3 tools/bridge/install.py
+```
+
+This creates `~/.claude-buddy/venv`, installs the bridge package
+editable, writes a hook shim to `~/.claude/hooks/buddy_hook.py`,
+symlinks six skills into `~/.claude/skills/`, and merges marker-fenced
+hook entries into `~/.claude/settings.json`. First `/buddy-run` will
+trigger a macOS Bluetooth permission dialog tied to
+`~/.claude-buddy/python` — click Allow.
+
+### Day-to-day
+
+| Slash command | What it does |
+| --- | --- |
+| `/buddy-run` | Start the daemon (interactive scan + pair on first run). |
+| `/buddy-stop` | Stop the daemon. |
+| `/buddy-status` | Show daemon/BLE state, sessions, tokens, recent entries. |
+| `/buddy-gifpush <folder>` | Stream a GIF character pack to the device. |
+| `/buddy-mute` | Stop sending events from the current CC session. |
+| `/buddy-unmute` | Resume sending events from the current CC session. |
+
+To silence the bridge for one project without uninstalling, drop
+`{"_buddy_disabled": true}` into that repo's
+`.claude/settings.local.json`.
+
+### Uninstall
+
+```bash
+python3 tools/bridge/uninstall.py
+```
+
+Reverses the install (removes hook entries, deletes the shim, removes
+skill symlinks). Optionally also `rm -rf ~/.claude-buddy/` to purge
+token history, mute state, and the BLE bond.
+
+See **[tools/bridge/README.md](tools/bridge/README.md)** for the full
+install runbook, manual end-to-end hardware verification steps, and
+developer setup.
 
 ## Controls
 
@@ -193,6 +247,10 @@ src/
   stats.h          — NVS-backed stats, settings, owner, species choice
 characters/        — example GIF character packs
 tools/             — generators and converters
+  bridge/          — Python daemon + skills bridging Claude Code CLI to
+                     the same BLE protocol the desktop apps use; see
+                     tools/bridge/README.md and the §"Claude Code CLI
+                     bridge" section above
 partitions_8mb.csv — 3 MB app + 4.8 MB LittleFS, no OTA
 ```
 
