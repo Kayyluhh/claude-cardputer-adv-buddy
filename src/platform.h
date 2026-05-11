@@ -9,6 +9,14 @@ namespace Platform {
 
 void init();
 
+// SD card (microSD slot on Cardputer-Adv). initSdCard() is called from
+// init(); it returns true if the card mounted. sdAvailable() reports the
+// last mount status so callers (character.cpp, xfer.h) can fail closed
+// rather than hitting SD.open() on an empty slot. Pins are wired CS=G12,
+// MOSI=G14, CLK=G40, MISO=G39 per the M5Stack Cardputer-Adv pinmap.
+bool    initSdCard();
+bool    sdAvailable();
+
 // Display
 void    setBrightness(uint8_t pct);   // 0..100
 void    screenOff();

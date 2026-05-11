@@ -1,7 +1,8 @@
 #pragma once
 #include <Arduino.h>
-#include <LittleFS.h>
+#include <SD.h>
 #include "ble_bridge.h"
+#include "platform.h"
 #include <mbedtls/base64.h>
 #include <ArduinoJson.h>
 
@@ -22,8 +23,8 @@ static void _xAck(const char* what, bool ok, uint32_t n = 0) {
 }
 
 static uint32_t _xWipeDir(const char* dir) {
-  File d = LittleFS.open(dir);
-  if (!d || !d.isDirectory()) { LittleFS.mkdir(dir); return 0; }
+  File d = SD.open(dir);
+  if (!d || !d.isDirectory()) { SD.mkdir(dir); return 0; }
   uint32_t freed = 0;
   File f = d.openNextFile();
   while (f) {
@@ -31,7 +32,7 @@ static uint32_t _xWipeDir(const char* dir) {
     char p[80];
     snprintf(p, sizeof(p), "%s/%s", dir, f.name());
     f.close();
-    LittleFS.remove(p);
+    SD.remove(p);
     f = d.openNextFile();
   }
   d.close();
@@ -42,8 +43,8 @@ static uint32_t _xWipeDir(const char* dir) {
 // under a different name would otherwise leave the old one's files eating
 // space. Wipe everything under /characters/, return total bytes reclaimed.
 static uint32_t _xWipeAllChars() {
-  File root = LittleFS.open("/characters");
-  if (!root || !root.isDirectory()) { LittleFS.mkdir("/characters"); return 0; }
+  File root = SD.open("/characters");
+  if (!root || !root.isDirectory()) { SD.mkdir("/characters"); return 0; }
   uint32_t freed = 0;
   File sub = root.openNextFile();
   while (sub) {
@@ -52,7 +53,7 @@ static uint32_t _xWipeAllChars() {
       snprintf(p, sizeof(p), "/characters/%s", sub.name());
       sub.close();
       freed += _xWipeDir(p);
-      LittleFS.rmdir(p);
+      SD.rmdir(p);
     } else {
       sub.close();
     }
@@ -72,7 +73,9 @@ const char* petName();
 void ownerSet(const char* name);
 const char* ownerName();
 #include "stats.h"
-#include <M5StickCPlus.h>
+// Note: M5StickCPlus.h was here from the upstream StickC-Plus reference
+// implementation; M5.Axp.* in the status handler below was migrated to
+// M5Unified's Power_Class (M5.Power.*) for Cardputer-Adv.
 
 inline bool xferCommand(JsonDocument& doc) {
   const char* cmd = doc["cmd"];
@@ -112,24 +115,25 @@ inline bool xferCommand(JsonDocument& doc) {
   if (strcmp(cmd, "status") == 0) {
     // Dump everything the info screens show. Manual printf rather than
     // ArduinoJson serialize — less heap churn, and the shape is fixed.
-    int vBat = (int)(M5.Axp.GetBatVoltage() * 1000);
-    int iBat = (int)M5.Axp.GetBatCurrent();
-    int vBus = (int)(M5.Axp.GetVBusVoltage() * 1000);
-    int pct = (vBat - 3200) / 10;
-    if (pct < 0) pct = 0; if (pct > 100) pct = 100;
+    int vBat = (int)M5.Power.getBatteryVoltage();      // mV
+    int iBat = (int)M5.Power.getBatteryCurrent();      // mA, negative = charging
+    int pct  = (int)Platform::batteryPct();
+    bool usb = Platform::isOnUsb();
+    // fsFree/fsTotal report SD card capacity now; zero if no card mounted
+    uint64_t fsTotal = Platform::sdAvailable() ? SD.totalBytes() : 0;
+    uint64_t fsUsed  = Platform::sdAvailable() ? SD.usedBytes()  : 0;
     char b[320];
     int len = snprintf(b, sizeof(b),
       "{\"ack\":\"status\",\"ok\":true,\"n\":0,\"data\":{"
       "\"name\":\"%s\",\"owner\":\"%s\",\"sec\":%s,"
       "\"bat\":{\"pct\":%d,\"mV\":%d,\"mA\":%d,\"usb\":%s},"
-      "\"sys\":{\"up\":%lu,\"heap\":%u,\"fsFree\":%lu,\"fsTotal\":%lu},"
+      "\"sys\":{\"up\":%lu,\"heap\":%u,\"fsFree\":%llu,\"fsTotal\":%llu},"
       "\"stats\":{\"appr\":%u,\"deny\":%u,\"vel\":%u,\"nap\":%lu,\"lvl\":%u}"
       "}}\n",
       petName(), ownerName(), bleSecure() ? "true" : "false",
-      pct, vBat, iBat, (vBus > 4000) ? "true" : "false",
+      pct, vBat, iBat, usb ? "true" : "false",
       millis() / 1000, ESP.getFreeHeap(),
-      (unsigned long)(LittleFS.totalBytes() - LittleFS.usedBytes()),
-      (unsigned long)LittleFS.totalBytes(),
+      (unsigned long long)(fsTotal - fsUsed), (unsigned long long)fsTotal,
       stats().approvals, stats().denials, statsMedianVelocity(),
       (unsigned long)stats().napSeconds, stats().level
     );
@@ -142,13 +146,22 @@ inline bool xferCommand(JsonDocument& doc) {
     const char* name = doc["name"] | "pet";
     _xTotal = doc["total"] | 0;
 
+    if (!Platform::sdAvailable()) {
+      char b[96];
+      int len = snprintf(b, sizeof(b),
+        "{\"ack\":\"char_begin\",\"ok\":false,\"n\":0,\"error\":\"no SD card\"}\n");
+      Serial.write(b, len);
+      bleWrite((const uint8_t*)b, len);
+      return true;
+    }
+
     // Fit check: free space after wiping everything under /characters/.
     // Do the math before touching the filesystem so a failed check leaves
     // the current character intact.
-    uint32_t free = LittleFS.totalBytes() - LittleFS.usedBytes();
-    uint32_t reclaimable = 0;
+    uint64_t free = SD.totalBytes() - SD.usedBytes();
+    uint64_t reclaimable = 0;
     {
-      File r = LittleFS.open("/characters");
+      File r = SD.open("/characters");
       if (r && r.isDirectory()) {
         File s = r.openNextFile();
         while (s) {
@@ -161,13 +174,14 @@ inline bool xferCommand(JsonDocument& doc) {
         r.close();
       }
     }
-    // Headroom for LittleFS metadata overhead — it's not byte-for-byte.
-    uint32_t available = free + reclaimable;
-    if (_xTotal > 0 && _xTotal + 4096 > available) {
+    // 4 KB headroom keeps parity with the old LittleFS metadata buffer; on
+    // SD it's just a small safety margin against off-by-one cluster math.
+    uint64_t available = free + reclaimable;
+    if (_xTotal > 0 && (uint64_t)_xTotal + 4096 > available) {
       char b[96];
       int len = snprintf(b, sizeof(b),
-        "{\"ack\":\"char_begin\",\"ok\":false,\"n\":%lu,\"error\":\"need %luK, have %luK\"}\n",
-        (unsigned long)available, (unsigned long)(_xTotal/1024), (unsigned long)(available/1024)
+        "{\"ack\":\"char_begin\",\"ok\":false,\"n\":%llu,\"error\":\"need %luK, have %lluK\"}\n",
+        (unsigned long long)available, (unsigned long)(_xTotal/1024), (unsigned long long)(available/1024)
       );
       Serial.write(b, len);
       bleWrite((const uint8_t*)b, len);
@@ -178,7 +192,7 @@ inline bool xferCommand(JsonDocument& doc) {
     characterClose();
     _xWipeAllChars();
     char dir[48]; snprintf(dir, sizeof(dir), "/characters/%s", _xCharName);
-    LittleFS.mkdir(dir);
+    SD.mkdir(dir);
     _xTotalWritten = 0;
     _xActive = true;
     _xAck("char_begin", true);
@@ -193,7 +207,7 @@ inline bool xferCommand(JsonDocument& doc) {
     _xWritten = 0;
     if (!path) { _xAck("file", false); return true; }
     char full[80]; snprintf(full, sizeof(full), "/characters/%s/%s", _xCharName, path);
-    _xFile = LittleFS.open(full, "w");
+    _xFile = SD.open(full, "w");
     _xAck("file", (bool)_xFile);
     return true;
   }
@@ -209,7 +223,7 @@ inline bool xferCommand(JsonDocument& doc) {
     _xFile.write(buf, outLen);
     _xWritten += outLen;
     _xTotalWritten += outLen;
-    // Ack every chunk — LittleFS writes can block on flash erase and the
+    // Ack every chunk — SD writes can block on SPI bus contention and the
     // UART RX buffer is only ~256 bytes. Without this the sender overruns it.
     _xAck("chunk", true, _xWritten);
     return true;

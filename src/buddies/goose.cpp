@@ -13,10 +13,13 @@ static void doSleep(uint32_t t) {
   static const char* const BREATHE[5] = { "            ", "    __      ", "   /  \\__   ", "  (  --  )  ", "   `~~~~`   " };
   static const char* const SNORE[5]   = { "    o O .   ", "    __      ", "   /  \\__   ", "  (  --  )  ", "   `~~~~`   " };
   static const char* const PEEK[5]    = { "            ", "    _o      ", "   /  \\__   ", "  (  --  )  ", "   `~~~~`   " };
-  static const char* const SHIFT[5]   = { "            ", "      __    ", "   __/  \\   ", "  (  zz  )  ", "   `~~~~`   " };
+  // NB: cannot use the name SHIFT here — M5Cardputer's Keyboard_def.h pulls
+  // in `#define SHIFT 0x80` via <M5Cardputer.h>, which expands inside this TU
+  // via gfx_compat.h. Rename to SHIFT_F (shift-foot) to dodge the macro.
+  static const char* const SHIFT_F[5] = { "            ", "      __    ", "   __/  \\   ", "  (  zz  )  ", "   `~~~~`   " };
   static const char* const HONK_DR[5] = { "    HnK..   ", "    __      ", "   /  \\__   ", "  (  zZ  )  ", "   `~~~~`   " };
 
-  const char* const* P[6] = { TUCK, BREATHE, SNORE, PEEK, SHIFT, HONK_DR };
+  const char* const* P[6] = { TUCK, BREATHE, SNORE, PEEK, SHIFT_F, HONK_DR };
   static const uint8_t SEQ[] = {
     0,1,0,1,0,1,2,1,
     0,1,0,3,

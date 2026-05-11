@@ -1,14 +1,42 @@
 #include "platform.h"
 #include <M5Cardputer.h>
+#include <SPI.h>
+#include <SD.h>
 #include <sys/time.h>
 
 namespace Platform {
 
 static bool _screenOn = true;
+static bool _sdMounted = false;
+
+// Cardputer-Adv microSD pins (M5Stack docs, Stamp-S3A pinmap).
+static const int SD_CS   = 12;
+static const int SD_MOSI = 14;
+static const int SD_SCK  = 40;
+static const int SD_MISO = 39;
+
+bool initSdCard() {
+  // Mirror the M5Cardputer SD example: bind SPI to our pins, then SD.begin
+  // with the CS pin. 25 MHz is conservative and matches the M5 reference
+  // sketch; bumping later is safe but we have no reason to.
+  SPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
+  _sdMounted = SD.begin(SD_CS, SPI, 25000000);
+  if (!_sdMounted) {
+    Serial.println("[sd] mount failed — no card or wrong format");
+  } else {
+    Serial.printf("[sd] mounted, %llu MB total\n", SD.cardSize() / (1024ULL * 1024));
+  }
+  return _sdMounted;
+}
+
+bool sdAvailable() { return _sdMounted; }
 
 void init() {
   // M5Cardputer.begin() (called by main) already initializes Display, Power,
-  // Speaker, Mic, Keyboard, Imu, and the I2C buses. Nothing extra here yet.
+  // Speaker, Mic, Keyboard, Imu, and the I2C buses. We add SD here because
+  // M5Cardputer does NOT auto-init the microSD slot; characters and folder
+  // pushes live on it.
+  initSdCard();
 }
 
 // ---------------- Display ----------------

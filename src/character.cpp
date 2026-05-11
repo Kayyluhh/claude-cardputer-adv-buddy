@@ -1,8 +1,9 @@
 #include "character.h"
 #include "gfx_compat.h"
-#include <LittleFS.h>
+#include <SD.h>
 #include <AnimatedGIF.h>
 #include <ArduinoJson.h>
+#include "platform.h"
 
 extern TFT_eSprite spr;
 
@@ -73,10 +74,10 @@ static uint16_t parseHexColor(const char* s, uint16_t fallback) {
   return (uint16_t)(((v >> 19) & 0x1F) << 11 | ((v >> 10) & 0x3F) << 5 | ((v >> 3) & 0x1F));
 }
 
-// --- AnimatedGIF file callbacks (LittleFS) ------------------------------
+// --- AnimatedGIF file callbacks (SD) ------------------------------------
 
 static void* gifOpenCb(const char* fname, int32_t* pSize) {
-  gifFile = LittleFS.open(fname, "r");
+  gifFile = SD.open(fname, "r");
   if (!gifFile) return nullptr;
   *pSize = gifFile.size();
   return (void*)&gifFile;
@@ -144,19 +145,16 @@ static void gifDrawCb(GIFDRAW* d) {
 // --- Public -------------------------------------------------------------
 
 bool characterInit(const char* name) {
-  if (!LittleFS.begin(false)) {
-    // begin() fails if already mounted — that's fine on reload
-    if (!LittleFS.open("/")) {
-      Serial.println("[char] LittleFS mount failed");
-      return false;
-    }
+  if (!Platform::sdAvailable()) {
+    Serial.println("[char] no SD card mounted — GIF mode unavailable");
+    return false;
   }
 
   // No name → scan /characters/ for the first directory present.
   // Makes the boot character whatever you last installed.
   static char scanned[24];
   if (!name) {
-    File d = LittleFS.open("/characters");
+    File d = SD.open("/characters");
     if (d && d.isDirectory()) {
       File e = d.openNextFile();
       while (e) {
@@ -178,7 +176,7 @@ bool characterInit(const char* name) {
   char mpath[64];
   snprintf(mpath, sizeof(mpath), "%s/manifest.json", basePath);
 
-  File mf = LittleFS.open(mpath, "r");
+  File mf = SD.open(mpath, "r");
   if (!mf) {
     Serial.printf("[char] manifest not found: %s\n", mpath);
     return false;
@@ -362,11 +360,11 @@ void characterTick() {
   int delayMs = 0;
   if (!gif.playFrame(false, &delayMs)) {
     // End of animation. Single-gif states freeze on the last frame instead
-    // of reopening — the LittleFS open + GIF header decode is a multi-ms
-    // blocking burst, and during sleep state it was looping every ~4s,
-    // possibly starving the BT controller. The sprite already holds the
-    // last frame; just stop ticking. Multi-gif states (idle rotation)
-    // still advance after a brief pause.
+    // of reopening — the SD open + GIF header decode is a multi-ms blocking
+    // burst, and during sleep state it was looping every ~4s, possibly
+    // starving the BT controller. The sprite already holds the last frame;
+    // just stop ticking. Multi-gif states (idle rotation) still advance
+    // after a brief pause.
     if (stateCount[curState] == 1) {
       gif.close();
       gifOpen = false;

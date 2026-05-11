@@ -5,8 +5,10 @@ struct Palette {
   uint16_t body, bg, text, textDim, ink;
 };
 
-// Call after M5.begin() and spr.createSprite(). Mounts LittleFS, reads
-// /characters/<name>/manifest.json, parses colors, caches GIF paths.
+// Call after M5.begin(), Platform::init() (which mounts the SD card), and
+// spr.createSprite(). Reads /characters/<name>/manifest.json from SD,
+// parses colors, caches GIF paths. Returns false if no SD card is mounted,
+// no characters are installed, or the manifest is missing/malformed.
 bool characterInit(const char* name);
 bool characterLoaded();
 

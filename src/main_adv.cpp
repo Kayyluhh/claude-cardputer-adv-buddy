@@ -3,7 +3,7 @@
 // BLE bridge, face-down nap. GIF character pipeline still stubbed —
 // Phase 6 swaps character_stub.cpp for the real character.cpp.
 #include <M5Cardputer.h>
-#include <LittleFS.h>
+#include <SD.h>
 #include <stdarg.h>
 #include "gfx_compat.h"
 #include "platform.h"
@@ -26,14 +26,15 @@ static void startBt() {
   bleInit(btName);
 }
 
-// Landscape geometry. Right panel column starts at RX (transcript / status).
+// Landscape geometry. Right panel column starts at PANEL_X (transcript / status).
 const int W = 240, H = 135;
-const int RX = 124, RW = W - RX;     // right column 116px wide
+const int PANEL_X = 124, PANEL_W = W - PANEL_X;     // right column 116px wide
 
 const uint16_t HOT   = 0xFA20;       // red-orange: warnings, deny, impatience
 const uint16_t PANEL = 0x2104;       // overlay panel background
-const uint16_t GREEN = 0x07E0;
-const uint16_t RED   = 0xF800;
+// GREEN (0x07E0) and RED (0xF800) come from M5GFX's `using namespace
+// m5gfx::ili9341_colors;` at file scope in M5GFX.h. Defining locals with
+// the same names would shadow-conflict (ambiguous lookup) on newer M5GFX.
 
 enum PersonaState { P_SLEEP, P_IDLE, P_BUSY, P_ATTENTION, P_CELEBRATE, P_DIZZY, P_HEART };
 const char* stateNames[] = { "sleep", "idle", "busy", "attention", "celebrate", "dizzy", "heart" };
@@ -191,9 +192,12 @@ static void applyReset(uint8_t idx) {
   }
 
   beep(800, 200);
-  if (idx == 0) {
-    // delete char: wipe /characters/, reboot into ASCII mode
-    File d = LittleFS.open("/characters");
+  // Both reset paths walk /characters/ on the SD card. We don't `SD.format()`
+  // on factory reset — the card may also hold the user's M5Launcher app cache
+  // and other personal files, and wiping it is a destructive surprise. Our
+  // domain on the card is /characters/ only; anything outside is the user's.
+  if (Platform::sdAvailable()) {
+    File d = SD.open("/characters");
     if (d && d.isDirectory()) {
       File e;
       while ((e = d.openNextFile())) {
@@ -205,23 +209,23 @@ static void applyReset(uint8_t idx) {
             char fp[128];
             snprintf(fp, sizeof(fp), "%s/%s", path, f.name());
             f.close();
-            LittleFS.remove(fp);
+            SD.remove(fp);
           }
           e.close();
-          LittleFS.rmdir(path);
+          SD.rmdir(path);
         } else {
           e.close();
-          LittleFS.remove(path);
+          SD.remove(path);
         }
       }
       d.close();
     }
-  } else {
-    // factory reset: NVS namespace wipe + filesystem format + BLE bonds
+  }
+  if (idx != 0) {
+    // factory reset: also wipe NVS namespace and BLE bonds
     _prefs.begin("buddy", false);
     _prefs.clear();
     _prefs.end();
-    LittleFS.format();
     bleClearBonds();
   }
   delay(300);
@@ -659,22 +663,22 @@ void drawHUD() {
   const int TY = 16;
   const int VIS = (H - TY - 4) / LH;
 
-  spr.fillRect(RX, 0, RW, H, p.bg);
+  spr.fillRect(PANEL_X, 0, PANEL_W, H, p.bg);
 
   spr.setTextColor(p.text, p.bg);
-  spr.setCursor(RX + 2, 2);
+  spr.setCursor(PANEL_X + 2, 2);
   if (tama.connected) spr.printf("%u running", tama.sessionsRunning);
   else                spr.print("no Claude");
   spr.setTextColor(p.textDim, p.bg);
-  spr.setCursor(RX + RW - 30, 2);
+  spr.setCursor(PANEL_X + PANEL_W - 30, 2);
   spr.printf("%d%%", Platform::batteryPct());
-  spr.drawFastHLine(RX, 12, RW, p.textDim);
+  spr.drawFastHLine(PANEL_X, 12, PANEL_W, p.textDim);
 
   if (tama.lineGen != lastLineGen) { msgScroll = 0; lastLineGen = tama.lineGen; wake(); }
 
   if (tama.nLines == 0) {
     spr.setTextColor(p.text, p.bg);
-    spr.setCursor(RX + 2, TY);
+    spr.setCursor(PANEL_X + 2, TY);
     spr.print(tama.msg);
     return;
   }
@@ -698,12 +702,12 @@ void drawHUD() {
     uint8_t row = start + i;
     bool fresh = (srcOf[row] == newest) && (msgScroll == 0);
     spr.setTextColor(fresh ? p.text : p.textDim, p.bg);
-    spr.setCursor(RX + 2, TY + i * LH);
+    spr.setCursor(PANEL_X + 2, TY + i * LH);
     spr.print(disp[row]);
   }
   if (msgScroll > 0) {
     spr.setTextColor(p.body, p.bg);
-    spr.setCursor(RX + RW - 18, H - 10);
+    spr.setCursor(PANEL_X + PANEL_W - 18, H - 10);
     spr.printf("-%u", msgScroll);
   }
 }
