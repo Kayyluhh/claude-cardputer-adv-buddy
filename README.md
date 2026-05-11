@@ -164,10 +164,12 @@ them with a counter; choice persists to NVS. The default 18 are upstream;
 
 ## GIF pets
 
-If you want a custom GIF character instead of an ASCII buddy, drag a
-character pack folder onto the drop target in the Hardware Buddy window. The
-app streams it over BLE and the stick switches to GIF mode live. **Settings
-→ delete char** reverts to ASCII mode.
+If you want a custom GIF character instead of an ASCII buddy, the
+Cardputer-Adv reads packs from its **microSD card** at `/characters/<name>/`.
+Copy a prepped folder there from a computer, or — if you've paired with
+the desktop apps — drag the folder onto the Hardware Buddy window drop
+target to stream it over BLE (writes to the same SD path live). **Settings
+→ delete char** wipes `/characters/` on the card and reverts to ASCII mode.
 
 A character pack is a folder with `manifest.json` and 96px-wide GIFs:
 
@@ -205,14 +207,17 @@ size and it produces a 96 px-wide set where the character is the same
 scale in every state. (96 px works fine; the column gives ~12 px of
 breathing room on either side.)
 
-The whole folder must fit under 1.8MB —
-`gifsicle --lossy=80 -O3 --colors 64` typically cuts 40–60%.
+The Cardputer-Adv SD path has no fixed cap beyond your card's free space.
+The desktop BLE folder-push (used for the StickC-Plus build) still
+enforces 1.8 MB per pack; `prep_character.py` warns at that line so packs
+remain portable. `gifsicle --lossy=80 -O3 --colors 64` typically cuts
+40–60% if you need to fit the BLE limit.
 
 See `characters/bufo/` for a working example.
 
-If you're iterating on a character and would rather skip the BLE round-trip,
-`tools/flash_character.py characters/bufo` stages it into `data/` and runs
-`pio run -t uploadfs` directly over USB.
+To iterate on the Cardputer-Adv, eject the SD card, copy the prepped
+folder over USB, reinsert. No firmware reflash needed — the pack is
+loaded from the card at boot.
 
 ## The seven states
 
@@ -241,7 +246,7 @@ src/
   buddy.cpp        — ASCII species dispatch + render helpers
   buddies/         — one file per species (20), seven anim functions each
   ble_bridge.cpp   — Nordic UART service, line-buffered TX/RX
-  character.cpp    — GIF decode + render (LittleFS + AnimatedGIF)
+  character.cpp    — GIF decode + render (microSD + AnimatedGIF)
   data.h           — wire protocol, JSON parse
   xfer.h           — folder push receiver
   stats.h          — NVS-backed stats, settings, owner, species choice
@@ -251,7 +256,7 @@ tools/             — generators and converters
                      the same BLE protocol the desktop apps use; see
                      tools/bridge/README.md and the §"Claude Code CLI
                      bridge" section above
-partitions_8mb.csv — 3 MB app + 4.8 MB LittleFS, no OTA
+partitions_8mb.csv — 3 MB app, no OTA; character packs live on microSD
 ```
 
 ## Availability

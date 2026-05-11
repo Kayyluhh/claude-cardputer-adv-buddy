@@ -2,7 +2,9 @@
 """
 Prep a character pack: downscale GIFs to 96px with a CONSISTENT crop
 across all states, so the character is the same size in every animation.
-Writes to characters/<name>/ ready to drag onto the Hardware Buddy window.
+Writes to characters/<name>/ ready to copy onto the Cardputer-Adv's
+microSD card at /characters/<name>/, or to drop onto the desktop
+Hardware Buddy window for BLE folder-push to a StickC-Plus-style device.
 
 Usage:
   python3 tools/prep_character.py <character-dir-or-zip>
@@ -109,10 +111,15 @@ def install(src: Path) -> None:
         "states": device_states,
     }, indent=2))
 
+    # The Cardputer-Adv build reads packs from SD, so the only cap is the
+    # card's free space. The desktop Hardware Buddy BLE folder-push (used
+    # for the StickC Plus build) still enforces 1.8 MB; warn at that line
+    # so packs prepped here remain portable to that path.
     cap_kb = 1800
     print(f"\nwrote {name}: {total:,} bytes -> {out}")
     if total > cap_kb * 1024:
-        print(f"  warning: over {cap_kb}KB — desktop install will reject it")
+        print(f"  warning: over {cap_kb}KB — desktop BLE folder-push will reject it")
+        print(f"           (Cardputer-Adv SD install has no such cap)")
         if not shutil.which("gifsicle"):
             hint = {
                 "darwin": "brew install gifsicle",
@@ -121,7 +128,8 @@ def install(src: Path) -> None:
             print(f"  gifsicle not found: {hint}")
         gifs = " ".join(f'"{g}"' for g in out.glob("*.gif"))
         print(f"  shrink: gifsicle --batch --lossy=80 -O3 --colors 64 {gifs}")
-    print("next: drag that folder onto the Hardware Buddy window")
+    print(f"next: copy '{out}' to /characters/{name}/ on the device's microSD card")
+    print(f"      (or drag the folder onto the desktop Hardware Buddy window for BLE push)")
 
 
 if __name__ == "__main__":

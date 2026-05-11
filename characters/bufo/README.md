@@ -14,5 +14,6 @@ mapping them to the seven states. The idle state has nine variants so the
 home screen rotates through different blinks and glances instead of looping
 one clip.
 
-Drag this folder onto the Hardware Buddy window to install, or
-`python3 tools/flash_character.py characters/bufo` to flash over USB.
+Copy this folder to the Cardputer-Adv's microSD card at `/characters/bufo/`
+to install, or drag it onto the desktop Hardware Buddy window to push over
+BLE (the firmware writes to the same SD path either way).
