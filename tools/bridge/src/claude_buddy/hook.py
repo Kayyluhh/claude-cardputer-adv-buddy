@@ -1,8 +1,8 @@
 """CC hook entry point: python -m claude_buddy.hook.
 
 Reads a hook payload from stdin, forwards to the daemon over Unix socket, and for
-PreToolUse waits up to 5s for a decision. Always exits 0; emits CC-formatted JSON
-on stdout for PreToolUse only.
+PreToolUse waits up to READ_TIMEOUT seconds for a decision. Always exits 0;
+emits CC-formatted JSON on stdout for PreToolUse only.
 """
 from __future__ import annotations
 
@@ -14,7 +14,12 @@ from pathlib import Path
 
 DEFAULT_SOCKET = "/tmp/claude-buddy.sock"
 CONNECT_TIMEOUT = 0.5
-READ_TIMEOUT = 5.0
+# Must exceed the daemon's permission_timeout_ms (default 30s) by enough
+# margin to receive the daemon's reply over the unix socket, or CC's
+# terminal prompt races in before the device's button press can resolve
+# the request. Caps under CC's own hook timeout configured in
+# settings.json (60s by default).
+READ_TIMEOUT = 35.0
 
 
 def _emit_pretooluse(decision: str, reason: str = "hardware buddy") -> None:
