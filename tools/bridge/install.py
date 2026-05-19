@@ -37,9 +37,39 @@ def _atomic_write(path: Path, content: str) -> None:
 
 
 def setup_venv(state_dir: Path, bridge: Path) -> Path:
-    """Create ~/.claude-buddy/venv if missing and pip install the bridge editable."""
+    """Create ~/.claude-buddy/venv if missing and pip install the bridge editable.
+
+    If an existing venv is broken (wrong Python, missing pip, repurposed
+    by another tool, etc.) we delete and recreate it. This avoids the
+    silent-failure mode where pip install -e runs inside a venv that
+    appears to work but doesn't actually pick up claude_buddy on the
+    Python path — which used to require manually rm -rf'ing the venv
+    before re-running install.
+    """
     state_dir.mkdir(parents=True, exist_ok=True)
     venv = state_dir / "venv"
+    venv_python = venv / "bin" / "python"
+
+    if venv.exists():
+        # Health-check the existing venv. The check has to pass three
+        # things: the python binary launches, it identifies as a venv
+        # (sys.prefix != sys.base_prefix), and its pip is available.
+        # Any failure → wipe and recreate.
+        healthy = False
+        try:
+            subprocess.check_call(
+                [str(venv_python), "-c",
+                 "import sys; assert sys.prefix != sys.base_prefix; "
+                 "import pip"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            healthy = True
+        except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+            pass
+        if not healthy:
+            print(f"  existing venv at {venv} looks unhealthy; recreating")
+            shutil.rmtree(venv)
+
     if not venv.exists():
         subprocess.check_call([sys.executable, "-m", "venv", str(venv)])
     pip = venv / "bin" / "pip"
