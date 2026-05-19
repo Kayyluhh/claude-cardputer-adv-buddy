@@ -557,9 +557,11 @@ static void drawHomeLandscape() {
       static char    disp[24][24];
       static uint8_t srcOf[24];
       uint8_t nDisp = 0;
-      for (uint8_t i = 0; i < tama.nLines && nDisp < 24; i++) {
+      // Same newest-first → oldest-first reversal as drawHUD: see the
+      // comment in that function for the rationale.
+      for (int i = (int)tama.nLines - 1; i >= 0 && nDisp < 24; i--) {
         uint8_t got = wrapInto(tama.lines[i], &disp[nDisp], 24 - nDisp, WIDTH);
-        for (uint8_t j = 0; j < got; j++) srcOf[nDisp + j] = i;
+        for (uint8_t j = 0; j < got; j++) srcOf[nDisp + j] = (uint8_t)i;
         nDisp += got;
       }
 
@@ -567,7 +569,7 @@ static void drawHomeLandscape() {
       uint8_t scroll  = (msgScroll > maxBack) ? maxBack : msgScroll;
       int end   = (int)nDisp - scroll;
       int start = end - SHOW; if (start < 0) start = 0;
-      uint8_t newest = tama.nLines - 1;
+      uint8_t newest = 0;
       for (int i = 0; start + i < end; i++) {
         uint8_t row = start + i;
         bool fresh = (srcOf[row] == newest) && (scroll == 0);
@@ -592,7 +594,11 @@ PersonaState derive(const TamaState& s) {
   if (!s.connected)            return P_IDLE;
   if (s.sessionsWaiting > 0)   return P_ATTENTION;
   if (s.recentlyCompleted)     return P_CELEBRATE;
-  if (s.sessionsRunning >= 3)  return P_BUSY;
+  // Upstream used >= 3 here, which is fine if you run multiple CC
+  // sessions in parallel but means a solo user never sees the busy
+  // animation — single-session usage keeps sessionsRunning at 0 or 1.
+  // Drop to >= 1 so the pet visibly reacts when ANY work starts.
+  if (s.sessionsRunning >= 1)  return P_BUSY;
   return P_IDLE;
 }
 
@@ -1009,9 +1015,14 @@ void drawHUD() {
   static char disp[32][24];
   static uint8_t srcOf[32];
   uint8_t nDisp = 0;
-  for (uint8_t i = 0; i < tama.nLines && nDisp < 32; i++) {
+  // Bridge sends tama.lines[] in newest-first order. Reverse here so
+  // disp[] is oldest-first; that way the existing display code (which
+  // shows disp[start..end-1] top-to-bottom) reads chronologically with
+  // the newest line at the BOTTOM of the visible window — matching how
+  // chat transcripts normally flow.
+  for (int i = (int)tama.nLines - 1; i >= 0 && nDisp < 32; i--) {
     uint8_t got = wrapInto(tama.lines[i], &disp[nDisp], 32 - nDisp, WIDTH);
-    for (uint8_t j = 0; j < got; j++) srcOf[nDisp + j] = i;
+    for (uint8_t j = 0; j < got; j++) srcOf[nDisp + j] = (uint8_t)i;
     nDisp += got;
   }
 
@@ -1020,7 +1031,10 @@ void drawHUD() {
 
   int end = (int)nDisp - msgScroll;
   int start = end - SHOW; if (start < 0) start = 0;
-  uint8_t newest = tama.nLines - 1;
+  // After the reversal above, lines[0] (the bridge's newest entry) ends
+  // up as the LAST source index in disp[]. "fresh" should highlight
+  // rows that came from that newest source.
+  uint8_t newest = 0;
   for (int i = 0; start + i < end; i++) {
     uint8_t row = start + i;
     bool fresh = (srcOf[row] == newest) && (msgScroll == 0);
