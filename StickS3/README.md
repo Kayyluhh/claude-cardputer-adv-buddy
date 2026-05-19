@@ -39,8 +39,13 @@ confirm download mode. Then re-run upload.
 
 ## Controls
 
-The StickS3 has two firmware-readable buttons (A = front "M5", B = side).
-The third side button is PMIC-only and not exposed to firmware.
+The StickS3 has two firmware-readable buttons:
+- **Button A** — the button on the front face, below the screen (GPIO 11)
+- **Button B** — the small button on the right side of the device (GPIO 12)
+
+The left-side button is the power button. It's wired to the PMIC and is
+not exposed to firmware; single-press wakes the device, double-press
+hard-offs, long-hold enters download/boot mode.
 
 |              | Normal               | Pet         | Info        | Menu / Settings / Reset | Approval    |
 | ------------ | -------------------- | ----------- | ----------- | ----------------------- | ----------- |

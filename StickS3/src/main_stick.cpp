@@ -319,8 +319,13 @@ static void drawSettings() {
     } else if (i == 6) {                          // clock rotation
       static const char* const RN[] = { "auto", "port", "land" };
       spr.print(RN[s.clockRot]);
-    } else if (i == 7) {                          // ascii pet
-      spr.printf("%u/%u", buddySpeciesIdx() + 1, buddySpeciesCount());
+    } else if (i == 7) {                          // ascii pet — show species name
+      // Right-align so the longest names ("capybara", "mushroom" — 8 chars)
+      // fit within the panel without overflowing the rounded border.
+      const char* nm = buddySpeciesName();
+      int textW = (int)strlen(nm) * 6;            // 6px per char at size 1
+      spr.setCursor(mx + mw - 6 - textW, my + 8 + i * 14);
+      spr.print(nm);
     }
   }
   // Hint row varies on the volume row: B-long mutes there.
@@ -409,26 +414,30 @@ static void clockUpdateOrient() {
   if (!Platform::imuAccel(ax, ay, az)) return;
   uint8_t lock = settings().clockRot;
   if (lock == 1) { clockOrient = 0; return; }       // portrait lock
+  // IMU axis remap for the StickS3 (datasheet page 7): X+ is the LONG axis
+  // pointing toward the USB-C end, Y+ is the short axis. So "device on its
+  // side" means Y is dominant, not X (which was upstream's StickC Plus
+  // assumption). This swap fixes the off-by-90° rotation behavior.
   if (lock == 2) {                                  // landscape lock
-    if (clockOrient == 0) clockOrient = (ax >= 0) ? 1 : 3;
-    if      (ax >  0.5f && clockOrient != 1) clockOrient = 1;
-    else if (ax < -0.5f && clockOrient != 3) clockOrient = 3;
+    if (clockOrient == 0) clockOrient = (ay >= 0) ? 1 : 3;
+    if      (ay >  0.5f && clockOrient != 1) clockOrient = 1;
+    else if (ay < -0.5f && clockOrient != 3) clockOrient = 3;
     return;
   }
   // Auto: dual-threshold hysteresis. Strict to enter sideways, loose to stay.
   bool side = (clockOrient == 0)
-    ? fabsf(ax) > 0.7f && fabsf(ay) < 0.5f && fabsf(az) < 0.5f
-    : fabsf(ax) > 0.4f;
+    ? fabsf(ay) > 0.7f && fabsf(ax) < 0.5f && fabsf(az) < 0.5f
+    : fabsf(ay) > 0.4f;
   if (side) { if (orientFrames < 20) orientFrames++; }
   else      { if (orientFrames > -10) orientFrames--; }
   if (clockOrient == 0 && orientFrames >= 15) {
-    clockOrient = (ax > 0) ? 1 : 3;
+    clockOrient = (ay > 0) ? 1 : 3;
   } else if (clockOrient != 0 && orientFrames <= -8) {
     clockOrient = 0;
   } else if (clockOrient != 0 && side) {
     // Direct 1↔3 swap when the stick is flipped end-to-end while sideways.
     static int8_t swapFrames = 0;
-    uint8_t want = (ax > 0) ? 1 : 3;
+    uint8_t want = (ay > 0) ? 1 : 3;
     if (want != clockOrient) { if (++swapFrames >= 8) { clockOrient = want; swapFrames = 0; } }
     else swapFrames = 0;
   }
@@ -486,6 +495,94 @@ static void drawClock() {
     M5.Display.fillRect(0, 0, 115, 90, p.bg);
     buddyRenderTo(&M5.Display, activeState);
   }
+  M5.Display.setRotation(0);
+}
+
+// Forward declaration of the transcript word-wrapper defined further down
+// — drawHomeLandscape calls it before its own definition appears.
+static uint8_t wrapInto(const char* in, char out[][24], uint8_t maxRows, uint8_t width);
+
+// Landscape home screen — buddy on the left, transcript on the right.
+// Activated when the device is tilted sideways on the home screen and the
+// charging-clock conditions aren't met. Paints direct-to-LCD in the rotated
+// coordinate space (240×135) using the same buddyRenderTo() helper the
+// landscape clock uses for the pet column.
+//
+// Layout (clockOrient = 1, BtnA-side down):
+//   x 0..114   pet column (buddy renders at scale 1)
+//   x 120..240 transcript column (5..7 wrapped lines)
+//
+// Like drawClock(), this function leaves the rotation as 0 on exit so any
+// subsequent sprite-based draws aren't pushed into a rotated framebuffer.
+static void drawHomeLandscape() {
+  const Palette& p = palette();
+  M5.Display.setRotation(clockOrient);
+
+  bool repaint = paintedOrient != clockOrient;
+  if (repaint) {
+    M5.Display.fillScreen(p.bg);
+    paintedOrient = clockOrient;
+  }
+
+  // Pet on left at 5 fps, same cadence as the landscape clock pet.
+  static uint32_t lastPetTick = 0;
+  if (millis() - lastPetTick >= 200) {
+    lastPetTick = millis();
+    M5.Display.fillRect(0, 0, 115, 135, p.bg);
+    buddyRenderTo(&M5.Display, activeState);
+  }
+
+  // Transcript on right. Repaint only when content changes or scroll
+  // shifts — full-rect clears at 60 Hz tear visibly.
+  static uint16_t lastDrawnLineGen = 0xFFFF;
+  static uint8_t  lastDrawnScroll  = 0xFF;
+  if (repaint || tama.lineGen != lastDrawnLineGen || msgScroll != lastDrawnScroll) {
+    lastDrawnLineGen = tama.lineGen;
+    lastDrawnScroll  = msgScroll;
+
+    M5.Display.fillRect(120, 0, 120, 135, p.bg);
+    M5.Display.setTextSize(1);
+
+    if (tama.nLines == 0) {
+      M5.Display.setTextColor(p.text, p.bg);
+      M5.Display.setCursor(124, 60);
+      M5.Display.print(tama.msg);
+    } else {
+      // Wrap each transcript line at ~19 chars (120 px / 6 px-per-char,
+      // minus a couple px of padding) into a flat display buffer. Up to
+      // ~13 wrapped lines fit at LH=10.
+      const uint8_t WIDTH = 19;
+      const int     LH    = 10;
+      const uint8_t SHOW  = 12;
+      static char    disp[24][24];
+      static uint8_t srcOf[24];
+      uint8_t nDisp = 0;
+      for (uint8_t i = 0; i < tama.nLines && nDisp < 24; i++) {
+        uint8_t got = wrapInto(tama.lines[i], &disp[nDisp], 24 - nDisp, WIDTH);
+        for (uint8_t j = 0; j < got; j++) srcOf[nDisp + j] = i;
+        nDisp += got;
+      }
+
+      uint8_t maxBack = (nDisp > SHOW) ? (nDisp - SHOW) : 0;
+      uint8_t scroll  = (msgScroll > maxBack) ? maxBack : msgScroll;
+      int end   = (int)nDisp - scroll;
+      int start = end - SHOW; if (start < 0) start = 0;
+      uint8_t newest = tama.nLines - 1;
+      for (int i = 0; start + i < end; i++) {
+        uint8_t row = start + i;
+        bool fresh = (srcOf[row] == newest) && (scroll == 0);
+        M5.Display.setTextColor(fresh ? p.text : p.textDim, p.bg);
+        M5.Display.setCursor(124, 4 + i * LH);
+        M5.Display.print(disp[row]);
+      }
+      if (scroll > 0) {
+        M5.Display.setTextColor(p.body, p.bg);
+        M5.Display.setCursor(220, 4);
+        M5.Display.printf("-%u", scroll);
+      }
+    }
+  }
+
   M5.Display.setRotation(0);
 }
 
@@ -561,7 +658,7 @@ void drawInfo() {
     _infoHeader(p, y, "ABOUT", infoPage);
     spr.setTextColor(p.textDim, p.bg);
     ln("I watch your Claude");
-    ln("desktop sessions.");
+    ln("Code sessions.");
     y += 6;
     ln("I sleep when nothing's");
     ln("happening, wake when");
@@ -665,11 +762,12 @@ void drawInfo() {
       spr.setTextColor(p.text, p.bg);
       ln("TO PAIR");
       spr.setTextColor(p.textDim, p.bg);
-      ln(" Open Claude desktop");
-      ln(" > Developer");
-      ln(" > Hardware Buddy");
-      y += 4;
-      ln(" auto-connects via BLE");
+      ln(" From Claude Code:");
+      ln("   /buddy-run");
+      y += 2;
+      ln(" Or Claude desktop:");
+      ln("   Developer >");
+      ln("   Hardware Buddy");
     }
 
   } else {
@@ -1151,24 +1249,45 @@ void loop() {
     }
   }
 
-  // ─── Charging clock + IMU rotation ───
+  // ─── Home screen + IMU rotation ───
+  // Orientation tracking now runs whenever the home screen is visible
+  // (not just when the charging clock is showing). That gives us landscape
+  // mode on the regular home screen too — buddy on the left, transcript
+  // on the right (see drawHomeLandscape). Menus, settings, info pages and
+  // approval prompts force homeVisible=false so they stay portrait.
   clockRefreshRtc();
-  bool clocking = displayMode == DISP_NORMAL
-               && !menuOpen && !settingsOpen && !resetOpen && !inPrompt
+  bool homeVisible = displayMode == DISP_NORMAL
+                  && !menuOpen && !settingsOpen && !resetOpen && !inPrompt;
+  bool clocking = homeVisible
                && tama.sessionsRunning == 0 && tama.sessionsWaiting == 0
                && dataRtcValid() && _onUsb;
-  if (clocking) clockUpdateOrient();
+  if (homeVisible) clockUpdateOrient();
   else { clockOrient = 0; orientFrames = 0; paintedOrient = 0; }
-  bool landscapeClock = clocking && clockOrient != 0;
+  bool landscape      = homeVisible && clockOrient != 0;
+  bool landscapeClock = clocking    && clockOrient != 0;
+  bool landscapeHome  = landscape   && !clocking;
 
-  static bool wasClocking = false;
+  static bool wasClocking  = false;
   static bool wasLandscape = false;
-  if (clocking != wasClocking || landscapeClock != wasLandscape) {
-    if (clocking && !landscapeClock) buddySetPeek(true);
-    else applyDisplayMode();
+  if (clocking != wasClocking || landscape != wasLandscape) {
+    if (landscape) {
+      // Switching INTO landscape — clear the rotated screen once and
+      // force the per-mode draw functions to repaint from scratch.
+      M5.Display.setRotation(clockOrient);
+      M5.Display.fillScreen(palette().bg);
+      M5.Display.setRotation(0);
+      paintedOrient = 0;
+    } else if (clocking) {
+      // Portrait clock: shrink the buddy and let the clock face take
+      // the lower half of the sprite.
+      buddySetPeek(true);
+    } else {
+      // Back to plain portrait home — restore full-size buddy + HUD.
+      applyDisplayMode();
+    }
     buddyInvalidate();
-    wasClocking = clocking;
-    wasLandscape = landscapeClock;
+    wasClocking  = clocking;
+    wasLandscape = landscape;
   }
   if (clocking) {
     uint8_t dow = _clkTm.tm_wday % 7;
@@ -1191,13 +1310,18 @@ void loop() {
   lastPasskey = pk;
 
   // ─── Render ───
-  if (napping || screenOff || landscapeClock) {
+  // Landscape mode (clock OR plain home) paints direct-to-LCD in the
+  // rotated coordinate space; skip the portrait sprite tick to avoid
+  // wasted work and torn frames.
+  if (napping || screenOff || landscape) {
     // skip sprite render
   } else {
     buddyTick(activeState);
   }
   if (landscapeClock) {
     drawClock();
+  } else if (landscapeHome) {
+    drawHomeLandscape();
   } else if (!napping && !screenOff) {
     if (blePasskey()) drawPasskey();
     else if (clocking) drawClock();

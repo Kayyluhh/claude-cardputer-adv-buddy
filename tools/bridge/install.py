@@ -55,7 +55,15 @@ def setup_venv(state_dir: Path, bridge: Path) -> Path:
 def write_hook_shim(state_dir: Path, hooks_dir: Path) -> Path:
     hooks_dir.mkdir(parents=True, exist_ok=True)
     shim = hooks_dir / "buddy_hook.py"
-    py = state_dir / "python"
+    # Point the shim at the venv python DIRECTLY (not the
+    # ~/.claude-buddy/python symlink). On macOS, Python 3.12 follows the
+    # symlink and uses the realpath to detect sys.prefix — which resolves
+    # to the system Python framework rather than the venv. The result is
+    # that `~/.claude-buddy/python -m claude_buddy.hook` fails with
+    # ModuleNotFoundError because the venv's site-packages aren't on
+    # sys.path. Using the venv interpreter's direct path keeps the venv
+    # context intact and the hook works on every fire.
+    py = state_dir / "venv" / "bin" / "python"
     body = (
         "#!/bin/bash\n"
         f'exec "{py}" -m claude_buddy.hook "$@"\n'

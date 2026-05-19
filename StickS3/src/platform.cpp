@@ -16,30 +16,29 @@ static bool _screenOn = true;
 bool initSdCard() { return false; }   // StickS3 has no microSD slot.
 bool sdAvailable() { return false; }
 
-void init() {
-  // The StickS3 ships with EXT_5V_EN enabled by default in M5Unified.
-  // That rail powers the Grove port and the IR TX/RX block, neither of
-  // which this firmware uses. Leaving it enabled causes the boost
-  // converter to whine audibly and drain the 250 mAh battery measurably.
-  // Setting cfg.output_power = false disables EXT_5V_EN at init.
-  //   - StickS3 datasheet page 6 ("EXT_5V_EN" section)
-  //   - M5Unified.hpp:130 (bool output_power = true; default)
+void init()
+{
+  // Disable the EXT_5V boost converter rail. M5Unified defaults it on
+  // (`output_power = true` in M5Unified.hpp:130) but we don't use the
+  // Grove / Hat / IR TX power rails, and leaving the boost converter
+  // running pumps audible noise into the audio path on this board.
   auto cfg = M5.config();
   cfg.output_power = false;
-  // Force the board id if auto-detection comes up unknown. M5Unified.cpp:353
-  // checks `if (board == board_t::board_unknown) { board = cfg.fallback_board; }`
-  // — relevant on bare `esp32-s3-devkitc-1` PlatformIO board, where there's
-  // no factory programming to identify the StickS3 unless we say so. Without
-  // this, internal_imu init can run with the wrong i2c pins and block
-  // forever in the first M5.Imu.update() call.
-  cfg.fallback_board = m5::board_t::board_M5StickS3;
   M5.begin(cfg);
 
-  // Cap speaker volume to ~70% per the StickS3 datasheet page 3 note:
-  // "When powered by battery (USB not connected), it is recommended to
-  //  keep the speaker volume below 75% to avoid unexpected device reboot
-  //  caused by excessive power consumption."
-  M5.Speaker.setVolume(180);
+  // Belt-and-suspenders: also write the M5PM1 EXT_5V_EN gate register
+  // directly after M5.begin returns. The cfg.output_power setting is
+  // applied during M5.begin's init sequence, but the StickS3-specific
+  // PMIC init runs inside its own board case statement
+  // (M5Unified.cpp:1830). If the cfg setting is processed before the
+  // PMIC is fully online the i2c write to register 0x06 bit 3 can
+  // silently fail. Calling setExtOutput(false) again here, with the
+  // PMIC definitely up, guarantees the rail is off.
+  M5.Power.setExtOutput(false);
+
+  // Speaker volume is set later in setup() via applyVolume() against
+  // the NVS-loaded volumeLevel. Don't init it here — leaving the AW8737
+  // amp idle-enabled with no audio signal produces audible hiss.
 
   // Default rotation is 0 (native portrait, 135 wide x 240 tall).
   M5.Display.setRotation(0);
