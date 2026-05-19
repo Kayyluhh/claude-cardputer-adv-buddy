@@ -980,10 +980,20 @@ void drawPet() {
 }
 
 void drawHUD() {
-  if (tama.promptId[0]) { drawApproval(); return; }
+  // Stop deferring to drawApproval the instant we've sent a decision —
+  // don't wait for the bridge to clear tama.promptId. Otherwise the
+  // overlay sticks around showing "sent..." until the next heartbeat,
+  // and during the wait the transcript stays hidden.
+  if (tama.promptId[0] && !responseSent) { drawApproval(); return; }
   const Palette& p = palette();
-  const int SHOW = 3, LH = 8, WIDTH = 21;
-  const int AREA = SHOW * LH + 4;
+  // AREA matches drawApproval's 78 px so that when we transition
+  // approval → transcript, the fillRect below wipes every pixel
+  // drawApproval painted. With the old AREA=28 (3 lines), the top
+  // 50 px of stale approval text persisted indefinitely beneath the
+  // freshly-drawn 3 transcript lines. Bumping SHOW to 9 also gives the
+  // user a much more useful slice of recent context.
+  const int SHOW = 9, LH = 8, WIDTH = 21;
+  const int AREA = 78;
   spr.fillRect(0, H - AREA, W, AREA, p.bg);
   spr.setTextSize(1);
 

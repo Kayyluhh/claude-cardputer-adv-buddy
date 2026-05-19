@@ -251,6 +251,18 @@ class Daemon:
                 break
             except asyncio.TimeoutError:
                 pass
+            # Try to reconnect if the link went down (e.g. after a
+            # firmware reflash). Without this, the daemon needs a manual
+            # restart every time you flash the device.
+            if self._ble is not None and not self._ble.is_connected:
+                try:
+                    await self._ble.connect()
+                    self.state.ble_connected = True
+                    self.state.device_name = self.config.device_name
+                    log.info("daemon: BLE reconnected to %s", self.config.device_address)
+                except Exception:
+                    self.state.ble_connected = False
+                    log.debug("daemon: BLE reconnect attempt failed; will retry next heartbeat")
             await self._send_heartbeat(force=True)
 
     async def _reaper_loop(self) -> None:
@@ -278,6 +290,9 @@ class Daemon:
                 await self._ble.send(snapshot)
             except Exception:
                 log.exception("daemon: heartbeat send failed")
+                # Mark the link as down so the heartbeat loop attempts
+                # a reconnect next iteration.
+                self.state.ble_connected = False
         self._persist_state()
 
     def _build_snapshot(self) -> dict:

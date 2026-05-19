@@ -7,6 +7,7 @@ import logging
 from typing import Callable, Protocol
 
 from bleak import BleakClient as _RealBleakClient
+from bleak.exc import BleakError
 
 from .wire import LineBuffer, NUS_RX_UUID, NUS_TX_UUID, encode_line
 
@@ -74,7 +75,42 @@ class BleClient:
         if self._client is None:
             raise RuntimeError("ble_client: not connected")
         data = encode_line(payload)
-        await self._client.write_gatt_char(NUS_RX_UUID, data, response=False)
+        try:
+            await self._client.write_gatt_char(NUS_RX_UUID, data, response=False)
+            return
+        except BleakError as e:
+            # Common after a firmware reflash: macOS keeps the link "up"
+            # in the cache but the GATT service table is stale, so writes
+            # fail with "Service Discovery has not been performed yet"
+            # (or similar). Tear down the client and reconnect to force
+            # fresh discovery, then retry the write once.
+            log.warning("ble_client: send failed (%s); reconnecting", e)
+            try:
+                await self._reconnect()
+            except Exception:
+                log.exception("ble_client: reconnect failed")
+                raise
+            await self._client.write_gatt_char(NUS_RX_UUID, data, response=False)
+
+    async def _reconnect(self) -> None:
+        """Tear down the existing client and connect a fresh one.
+
+        Used after a send error to recover from stale GATT state. Bleak's
+        BleakClient.is_connected can still report True even when the
+        cached services are gone — only an explicit disconnect+connect
+        forces re-discovery on CoreBluetooth.
+        """
+        if self._client is not None:
+            try:
+                await self._client.stop_notify(NUS_TX_UUID)
+            except Exception:
+                pass
+            try:
+                await self._client.disconnect()
+            except Exception:
+                pass
+            self._client = None
+        await self.connect()
 
     def _on_notify(self, _handle, data: bytearray) -> None:
         for raw in self._line_buffer.feed(bytes(data)):
