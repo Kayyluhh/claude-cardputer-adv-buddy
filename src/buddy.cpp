@@ -46,10 +46,12 @@ const uint16_t BUDDY_RED    = 0xF800;
 const uint16_t BUDDY_BLUE   = 0x041F;
 
 // ──────────────── shared rendering helpers ────────────────
-// _tgt always points at the sprite now. The original code retargeted it
-// to M5.Lcd for portrait/landscape clock mode; that mode is gone on the
-// Cardputer-Adv (no battery-backed RTC, no IMU rotation feature).
-static M5Canvas* _tgt = &spr;
+// _tgt normally points at the sprite. The StickS3 build retargets it to
+// M5.Display (a different LovyanGFX subclass) during the landscape clock
+// branch so the buddy paints direct-to-LCD in the rotated coordinate
+// space — see buddyRenderTo() below. The Cardputer-Adv build never
+// retargets and behaves byte-identically.
+static LovyanGFX* _tgt = &spr;
 // 2× on home screen, 1× in peek (PET/INFO) and landscape clock. Species
 // art is space-padded to a fixed width for alignment at 1×; at 2× we trim
 // and re-center per line so the padding doesn't push ink off-screen.
@@ -196,3 +198,24 @@ void buddyTick(uint8_t personaState) {
   const Species* sp = SPECIES_TABLE[currentSpeciesIdx];
   if (sp->states[personaState]) sp->states[personaState](tickCount);
 }
+
+// Paint into a foreign LovyanGFX surface (e.g. M5.Display) without
+// disturbing the sprite path. Used by the StickS3 landscape charging-
+// clock branch — buddyRenderTo(&M5.Display, activeState) draws the pet
+// into the rotated screen at scale 1× so it fits the smaller pet box.
+// The sprite stays in portrait coords; we just temporarily swap the
+// target pointer and restore it before returning.
+void buddyRenderTo(LovyanGFX* target, uint8_t personaState) {
+  uint8_t prevScale = _scale;
+  _scale = 1;
+  LovyanGFX* prev = _tgt;
+  _tgt = target;
+  uint32_t now = millis();
+  if ((int32_t)(now - nextTickAt) >= 0) { nextTickAt = now + TICK_MS; tickCount++; }
+  if (personaState >= 7) personaState = B_IDLE;
+  const Species* sp = SPECIES_TABLE[currentSpeciesIdx];
+  if (sp->states[personaState]) sp->states[personaState](tickCount);
+  _tgt = prev;
+  _scale = prevScale;
+}
+

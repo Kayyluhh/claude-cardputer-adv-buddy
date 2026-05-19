@@ -35,6 +35,11 @@ If you have the original Cardputer or an M5StickC Plus, this branch
 won't run on it as-is — see the upstream repo
 (`anthropics/claude-desktop-buddy`) for the StickC Plus build.
 
+A second build for the **M5Stack StickS3** (smaller portrait ESP32-S3
+device with 2 buttons and no microSD) lives under
+[`StickS3/`](StickS3/README.md) — see that subfolder's README for
+flashing instructions, controls, and the differences from this build.
+
 ## Flashing
 
 Install

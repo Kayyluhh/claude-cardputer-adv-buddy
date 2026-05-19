@@ -20,8 +20,9 @@ void poll();
 
 // Edge events — true exactly once for the frame the edge fires, then clear.
 bool wasPressedA();                                 // BtnA short, on release
-bool wasPressedB();                                 // BtnB short, on press
+bool wasPressedB();                                 // BtnB short, on press (suppressed if a long-press fired)
 bool wasLongPressedA(uint32_t holdMs = 600);        // BtnA held >= holdMs
+bool wasLongPressedB(uint32_t holdMs = 600);        // BtnB held >= holdMs (settings menu volume-row mute)
 
 // Steady-state queries.
 bool isHeldA();

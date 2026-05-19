@@ -1,5 +1,12 @@
 #include "platform.h"
 #include <M5Unified.h>
+// SD.h isn't used on the StickS3 (no microSD slot) but the shared
+// ../src/xfer.h header includes it unconditionally for the Cardputer-Adv
+// path. Pulling it in here is how PlatformIO's Library Dependency Finder
+// discovers the framework's built-in SD library; without it the
+// StickS3 build of xfer.h fails with "SD.h: No such file or directory".
+// The library compiles into the binary as dead code (linker drops it).
+#include <SD.h>
 #include <sys/time.h>
 
 namespace Platform {
