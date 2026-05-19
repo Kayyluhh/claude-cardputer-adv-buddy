@@ -40,7 +40,7 @@ class GlobalState:
     tokens_cumulative: int = 0
     tokens_today: int = 0
     tokens_today_date: date | None = None
-    entries: deque[str] = field(default_factory=lambda: deque(maxlen=8))
+    entries: deque[str] = field(default_factory=lambda: deque(maxlen=32))
     last_msg: str = ""
     ble_connected: bool = False
     device_name: str | None = None
@@ -115,9 +115,16 @@ def append_entry(gs: GlobalState, msg: str) -> None:
 
 
 def wire_entries(gs: GlobalState) -> list[str]:
-    """Return the newest 4 entries in newest-first order — what rides the BLE wire."""
-    last_four = list(gs.entries)[-4:]
-    return list(reversed(last_four))
+    """Return the newest 12 entries in newest-first order — what rides the BLE wire.
+
+    The firmware-side transcript HUD shows up to 9 lines in portrait
+    and 12 in landscape; sending 12 keeps the device buffer full enough
+    that scrolling backward is meaningful instead of falling off the
+    bridge's own deque after a few taps. Each entry is ~30 chars so 12
+    is ~400 bytes per snapshot — well within BLE throughput budget.
+    """
+    last_n = list(gs.entries)[-12:]
+    return list(reversed(last_n))
 
 
 def maybe_rollover_tokens(gs: GlobalState, *, today: date) -> None:

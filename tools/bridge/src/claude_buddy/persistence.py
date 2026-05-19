@@ -79,7 +79,7 @@ class Config:
     device_address: str | None = None
     device_name: str | None = None
     owner_name: str | None = None
-    permission_timeout_ms: int = 5000
+    permission_timeout_ms: int = 30000
     device_idle_timeout_ms: int = 600000  # 10 minutes
 
 
@@ -98,7 +98,7 @@ def load_config(path: Path) -> Config:
         device_address=_coerce(raw, "device_address", None),
         device_name=_coerce(raw, "device_name", None),
         owner_name=_coerce(raw, "owner_name", None),
-        permission_timeout_ms=_coerce(raw, "permission_timeout_ms", 5000),
+        permission_timeout_ms=_coerce(raw, "permission_timeout_ms", 30000),
         device_idle_timeout_ms=_coerce(raw, "device_idle_timeout_ms", 600000),
     )
 
