@@ -26,6 +26,13 @@ void init() {
   //   - M5Unified.hpp:130 (bool output_power = true; default)
   auto cfg = M5.config();
   cfg.output_power = false;
+  // Force the board id if auto-detection comes up unknown. M5Unified.cpp:353
+  // checks `if (board == board_t::board_unknown) { board = cfg.fallback_board; }`
+  // — relevant on bare `esp32-s3-devkitc-1` PlatformIO board, where there's
+  // no factory programming to identify the StickS3 unless we say so. Without
+  // this, internal_imu init can run with the wrong i2c pins and block
+  // forever in the first M5.Imu.update() call.
+  cfg.fallback_board = m5::board_t::board_M5StickS3;
   M5.begin(cfg);
 
   // Cap speaker volume to ~70% per the StickS3 datasheet page 3 note:

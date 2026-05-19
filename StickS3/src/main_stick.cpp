@@ -929,24 +929,48 @@ void drawHUD() {
 
 // ──────────────── setup / loop ────────────────
 
+// Trace helper for setup() — prints with flush so a hang shows the last
+// successful checkpoint instead of being lost in stdio buffering.
+static void trace(const char* msg) {
+  Serial.print("[stick] ");
+  Serial.println(msg);
+  Serial.flush();
+}
+
 void setup() {
-  Platform::init();           // M5.begin(cfg) with output_power=false; brightness, IMU, audio
+  Serial.begin(115200);
+  delay(50);
+  trace("setup: begin");
+
+  Platform::init();           // M5.begin(cfg) with output_power=false + fallback_board
+  trace("setup: Platform::init done");
+
   Input::init();
+  trace("setup: Input::init done");
+
   startBt();
+  trace("setup: BLE up");
 
   applyBrightness();
   applyVolume(settings().volumeLevel);
+  trace("setup: brightness/volume set");
 
   lastInteractMs = millis();
   statsLoad();
+  trace("setup: stats loaded");
   settingsLoad();
+  trace("setup: settings loaded");
   petNameLoad();
-  applyVolume(settings().volumeLevel);   // reapply after settingsLoad — NVS-loaded value
+  trace("setup: petname loaded");
+  applyVolume(settings().volumeLevel);
   buddyInit();
+  trace("setup: buddy initialized");
 
   spr.setColorDepth(16);
   spr.createSprite(W, H);
+  trace("setup: sprite created");
   applyDisplayMode();
+  trace("setup: applyDisplayMode done");
 
   // Splash: "<owner>'s <pet>" if owner is set, else a generic greeting.
   {
@@ -967,10 +991,12 @@ void setup() {
     }
     spr.setTextDatum(TL_DATUM); spr.setTextSize(1);
     spr.pushSprite(0, 0);
-    delay(1800);
+    trace("setup: splash pushed");
+    delay(500);                            // shortened for faster bring-up iteration
+    trace("setup: splash delay done");
   }
 
-  Serial.println("buddy: StickS3 ready");
+  trace("setup: buddy ready, entering loop");
 }
 
 void loop() {
@@ -978,6 +1004,17 @@ void loop() {
   Platform::tickAudio();      // no-op (Speaker is non-blocking)
   t++;
   uint32_t now = millis();
+
+  // Heartbeat once per second so we can tell if loop is running at all.
+  // If this print stops, we know what frame it died on.
+  static uint32_t lastHeartbeat = 0;
+  if (now - lastHeartbeat >= 1000) {
+    lastHeartbeat = now;
+    Serial.printf("[stick] loop tick=%lu state=%d btA=%d btB=%d\n",
+                  (unsigned long)t, activeState,
+                  Input::isHeldA() ? 1 : 0, Input::isHeldB() ? 1 : 0);
+    Serial.flush();
+  }
 
   dataPoll(&tama);
   if (statsPollLevelUp()) triggerOneShot(P_CELEBRATE, 3000);
