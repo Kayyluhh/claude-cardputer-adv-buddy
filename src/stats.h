@@ -177,7 +177,11 @@ inline uint8_t statsFedProgress() {
 // --- Settings --------------------------------------------------------------
 
 struct Settings {
-  bool sound;
+  // 5-step speaker volume: 0=mute, 1..4 scale up to ~71% PWM (M5.Speaker
+  // setVolume(180), capped per the StickS3 datasheet's <75% brown-out note).
+  // The Cardputer-Adv build treats this as a binary on/off (any non-zero
+  // = sound on); its settings menu toggles between 0 and 4.
+  uint8_t volumeLevel;
   bool bt;
   bool wifi;     // placeholder — no WiFi stack linked yet, just stores the pref
   bool led;
@@ -185,11 +189,12 @@ struct Settings {
   uint8_t clockRot;  // 0=auto 1=portrait 2=landscape
 };
 
-static Settings _settings = { true, true, false, true, true, 0 };
+static Settings _settings = { 4, true, false, true, true, 0 };
 
 inline void settingsLoad() {
   _prefs.begin("buddy", true);
-  _settings.sound = _prefs.getBool("s_snd", true);
+  _settings.volumeLevel = _prefs.getUChar("s_vol", 4);
+  if (_settings.volumeLevel > 4) _settings.volumeLevel = 4;
   _settings.bt    = _prefs.getBool("s_bt",  true);
   _settings.wifi  = _prefs.getBool("s_wifi",false);
   _settings.led   = _prefs.getBool("s_led", true);
@@ -201,7 +206,7 @@ inline void settingsLoad() {
 
 inline void settingsSave() {
   _prefs.begin("buddy", false);
-  _prefs.putBool("s_snd", _settings.sound);
+  _prefs.putUChar("s_vol", _settings.volumeLevel);
   _prefs.putBool("s_bt",  _settings.bt);
   _prefs.putBool("s_wifi",_settings.wifi);
   _prefs.putBool("s_led", _settings.led);

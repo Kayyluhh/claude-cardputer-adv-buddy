@@ -112,7 +112,7 @@ static void wake() {
 bool responseSent = false;
 
 static void beep(uint16_t freq, uint16_t dur) {
-  if (settings().sound) Platform::tone(freq, dur);
+  if (settings().volumeLevel > 0) Platform::tone(freq, dur);
 }
 
 // Mario 1-UP — E5 G5 E6 C6 D6 G6, ~35ms/note (90ms tail). Loud enough
@@ -121,8 +121,8 @@ static void beep(uint16_t freq, uint16_t dur) {
 static const uint16_t SFX_ALERT_F[] = { 659, 784, 1319, 1047, 1175, 1568 };
 static const uint16_t SFX_ALERT_D[] = {  35,  35,   35,   35,   35,   90 };
 static void sfxAlert() {
-  if (settings().sound) Platform::beepSeq(SFX_ALERT_F, SFX_ALERT_D,
-                                           sizeof(SFX_ALERT_F) / sizeof(SFX_ALERT_F[0]));
+  if (settings().volumeLevel > 0) Platform::beepSeq(SFX_ALERT_F, SFX_ALERT_D,
+                                                     sizeof(SFX_ALERT_F) / sizeof(SFX_ALERT_F[0]));
 }
 
 static void sendCmd(const char* json) {
@@ -166,7 +166,9 @@ static void applySetting(uint8_t idx) {
   Settings& s = settings();
   switch (idx) {
     case 0: brightLevel = (brightLevel + 1) % 5; applyBrightness(); return;
-    case 1: s.sound = !s.sound; break;
+    // Cardputer-Adv: binary toggle. 0 = mute, 4 = max. StickS3's main_stick.cpp
+    // will replace this with a full 0..4 cycler + hold-B-to-mute in-row.
+    case 1: s.volumeLevel = (s.volumeLevel == 0) ? 4 : 0; break;
     case 2: s.bt = !s.bt; break;
     case 3: s.wifi = !s.wifi; break;
     case 4: s.led = !s.led; break;
@@ -255,7 +257,7 @@ static void drawSettings() {
   spr.drawRoundRect(mx, my, mw, mh, 4, p.textDim);
   spr.setTextSize(1);
   Settings& s = settings();
-  bool vals[] = { s.sound, s.bt, s.wifi, s.led, s.hud };
+  bool vals[] = { s.volumeLevel > 0, s.bt, s.wifi, s.led, s.hud };
   for (int i = 0; i < SETTINGS_N; i++) {
     bool sel = (i == settingsSel);
     spr.setTextColor(sel ? p.text : p.textDim, PANEL);

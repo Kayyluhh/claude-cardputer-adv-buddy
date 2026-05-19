@@ -1,0 +1,8 @@
+# ESP32-S3-PICO-1-N8R8 8MB flash layout for StickS3.
+# Single 3 MB app slot. The StickS3 has no microSD slot and the firmware
+# uses no on-flash filesystem (no GIF support on this build), so the
+# remaining ~4.8 MB above app0 is left unallocated. No OTA.
+# Name,    Type, SubType, Offset,   Size,
+nvs,       data, nvs,     0x9000,   0x6000,
+phy_init,  data, phy,     0xf000,   0x1000,
+app0,      app,  ota_0,   0x10000,  0x300000,

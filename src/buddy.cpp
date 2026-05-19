@@ -9,17 +9,29 @@ extern TFT_eSprite spr;
 enum { B_SLEEP, B_IDLE, B_BUSY, B_ATTENTION, B_CELEBRATE, B_DIZZY, B_HEART };
 
 // ──────────────── shared geometry ────────────────
-// Cardputer-Adv landscape 240x135. Buddy lives in the left ~120px column;
-// transcript + status will live in the right ~120px column. CANVAS_W is
-// the buddy redraw zone (avoids trampling the right panel). Y_BASE=15
-// keeps the home-screen scale=2 redraw height (15+40+12)*2 = 134 within
-// the 135px canvas.
-const int BUDDY_X_CENTER = 60;
-const int BUDDY_CANVAS_W = 120;
-const int BUDDY_Y_BASE   = 15;
+// The buddy renderer paints directly into the full-canvas sprite (`spr`).
+// X_CENTER and CANVAS_W therefore describe where on the screen the buddy
+// column lives, not a separate sprite size. Two layouts share this code:
+//
+//   Cardputer-Adv landscape (240×135): buddy in the left ~120px column,
+//   transcript + status in the right ~120px column. Y_BASE=15 keeps the
+//   home-screen scale=2 redraw height (15+40+12)*2 = 134 within 135px.
+//
+//   StickS3 portrait (135×240): buddy across the full width at the top,
+//   transcript + status below. X_CENTER moves to the canvas midline so
+//   the sprite is horizontally centered; CANVAS_W = 135 covers the
+//   full clear-rect zone.
+#ifdef STICKS3_BUILD
+const int BUDDY_X_CENTER  = 67;     // 135 / 2 (rounded down)
+const int BUDDY_CANVAS_W  = 135;
+#else
+const int BUDDY_X_CENTER  = 60;
+const int BUDDY_CANVAS_W  = 120;
+#endif
+const int BUDDY_Y_BASE    = 15;
 const int BUDDY_Y_OVERLAY = 6;
-const int BUDDY_CHAR_W   = 6;
-const int BUDDY_CHAR_H   = 8;
+const int BUDDY_CHAR_W    = 6;
+const int BUDDY_CHAR_H    = 8;
 
 // ──────────────── shared colors ────────────────
 const uint16_t BUDDY_BG     = 0x0000;
